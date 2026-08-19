@@ -22,6 +22,14 @@ export default defineConfig({
           label: 'Part I — データベースを捉える',
           items: [{ autogenerate: { directory: '01-foundations' } }],
         },
+        {
+          label: 'Part II — ストレージとインデックス',
+          items: [{ autogenerate: { directory: '02-storage' } }],
+        },
+        {
+          label: 'Part III — クエリ処理',
+          items: [{ autogenerate: { directory: '03-query-processing' } }],
+        },
       ],
     }),
   ],
