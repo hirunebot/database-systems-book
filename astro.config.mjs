@@ -34,6 +34,10 @@ export default defineConfig({
           label: 'Part IV — トランザクションと障害回復',
           items: [{ autogenerate: { directory: '04-transactions' } }],
         },
+        {
+          label: 'Part V — 分散データベース',
+          items: [{ autogenerate: { directory: '05-distributed-db' } }],
+        },
       ],
     }),
   ],
