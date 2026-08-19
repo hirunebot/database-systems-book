@@ -18,22 +18,22 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 データベースを「SQLを送る保存先」ではなく、複数の機構がトレードオフを取りながら協調するシステムとして理解します。1件の注文が保存され、検索され、競合を解決し、障害から復旧し、別ノードへ複製されるまでを段階的に追跡します。
 
 <CardGrid>
-  <Card title="Part I — データベースを捉える">
+  <Card title="Part I — データベースを捉える" href="/01-foundations/01-overview/">
     リレーショナルモデルと、SQLからストレージまでの全体像を整理します。
   </Card>
-  <Card title="Part II — ストレージとインデックス">
+  <Card title="Part II — ストレージとインデックス" href="/02-storage/03-pages-records-buffer-pool/">
     ページ、バッファプール、B+tree、ハッシュ、LSM-treeを扱います。
   </Card>
-  <Card title="Part III — クエリ処理">
+  <Card title="Part III — クエリ処理" href="/03-query-processing/06-sql-logical-plans/">
     SQL、論理・物理実行計画、join、コストベース最適化をつなぎます。
   </Card>
-  <Card title="Part IV — トランザクションと障害回復">
+  <Card title="Part IV — トランザクションと障害回復" href="/04-transactions/10-acid-isolation/">
     ACID、MVCC、lock、WAL、checkpoint、redo/undoを理解します。
   </Card>
-  <Card title="Part V — 分散データベース">
+  <Card title="Part V — 分散データベース" href="/05-distributed-db/13-replication-consistency/">
     replication、consensus、Raft、sharding、分散トランザクションへ進みます。
   </Card>
-  <Card title="Part VI — アプリケーションと実運用">
+  <Card title="Part VI — アプリケーションと実運用" href="/06-operations/17-application-operations/">
     接続、migration、監視、backup、failoverを実装判断へ結びつけます。
   </Card>
 </CardGrid>

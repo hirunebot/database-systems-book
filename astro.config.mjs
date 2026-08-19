@@ -38,6 +38,14 @@ export default defineConfig({
           label: 'Part V — 分散データベース',
           items: [{ autogenerate: { directory: '05-distributed-db' } }],
         },
+        {
+          label: 'Part VI — アプリケーションと実運用',
+          items: [{ autogenerate: { directory: '06-operations' } }],
+        },
+        {
+          label: '付録',
+          items: [{ autogenerate: { directory: '07-appendix' } }],
+        },
       ],
     }),
   ],
