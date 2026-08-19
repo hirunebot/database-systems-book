@@ -12,9 +12,9 @@ Webアプリケーション開発者のための、仕組みから学ぶデー�
 - Part IV — トランザクションと障害回復
 - Part V — 分散データベース
 - Part VI — アプリケーションと実運用
-- 付録 — 用語集、目的別の読み方と参考資料
+- 付録 — 用語集、目的別の読み方、参考資料、トピック対応表
 
-全18章の執筆計画は [index.md](./index.md) にあります。公開本文は [src/content/docs](./src/content/docs) にあります。
+全18章の執筆計画は [index.md](./index.md) にあります。完成した公開本文は [src/content/docs](./src/content/docs) にあります。
 
 ## ローカルで読む
 
@@ -28,11 +28,11 @@ bun run dev
 ## 検証
 
 ```bash
-bun run build
+bun run check
 bun run preview
 ```
 
-Astro Starlightで静的siteを生成し、Mermaid図、code highlight、sidebar、ページ内目次、Pagefind全文検索を提供します。
+`bun run check`は章番号、共通節、内部リンク、未完了表記を検証してから静的siteをbuildします。Astro StarlightでMermaid図、code highlight、sidebar、ページ内目次、Pagefind全文検索を提供します。
 
 ## 編集方針
 

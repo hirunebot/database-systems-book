@@ -12,6 +12,14 @@ sidebar:
 
 > 「注文完了をuserへ返した」とき、systemのどこまでが、どのfailureに対して保証されているのか。
 
+## この章で答える問い
+
+- 単一nodeで注文を作るとき、schema、index、transaction、WALはどう連携するのか
+- COMMIT前後のcrashとresponse lossで、どのdurable stateが残るのか
+- Replicationとfailoverを追加すると「注文完了」の意味はどう変わるのか
+- Sharding後に在庫不変条件をどこで守るのか
+- Paymentを含むSagaをoutbox、inbox、idempotencyでどう回復可能にするのか
+
 ## system要件
 
 小さなEC serviceから始めます。
@@ -71,13 +79,23 @@ CREATE TABLE inventory (
   version     BIGINT NOT NULL DEFAULT 0
 );
 
+CREATE TABLE order_requests (
+  idempotency_key  TEXT PRIMARY KEY,
+  request_hash     TEXT NOT NULL,
+  status           TEXT NOT NULL
+                   CHECK (status IN ('processing', 'completed', 'failed')),
+  response         JSONB,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE orders (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   idempotency_key  TEXT NOT NULL UNIQUE,
   customer_id      BIGINT NOT NULL REFERENCES customers(id),
   status           TEXT NOT NULL
                    CHECK (status IN (
-                     'pending', 'confirmed', 'payment_failed', 'cancelled'
+                     'pending', 'inventory_reserved', 'payment_authorized',
+                     'confirmed', 'payment_failed', 'cancelled'
                    )),
   total_amount     INTEGER NOT NULL CHECK (total_amount >= 0),
   ordered_at       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -185,7 +203,7 @@ COMMIT;
 ```
 
 :::note[簡略化]
-実装ではorder_requests table定義、request hash、error result retention、price変更との整合、複数itemのlock順を追加します。ここでは内部経路を追いやすくするため一商品へ絞ります。
+実装ではrequest hashの検証、error result retention、price変更との整合、複数itemのlock順を追加します。ここでは内部経路を追いやすくするため一商品へ絞ります。
 :::
 
 ## oversellを防ぐ

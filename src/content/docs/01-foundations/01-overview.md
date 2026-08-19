@@ -245,4 +245,10 @@ WALを使うDBでは、commitに必要なログの永続化を先に保証し、
 4. 単一ノードから複数ノードへ拡張したとき、新たに考える必要がある失敗を3つ挙げてください。
 5. throughputが増えてもlatencyが悪化する状況を一つ考えてください。
 
+## 参考資料
+
+- [PostgreSQL Documentation: The Path of a Query](https://www.postgresql.org/docs/current/query-path.html)
+- [PostgreSQL Documentation: Database Physical Storage](https://www.postgresql.org/docs/current/storage.html)
+- [PostgreSQL Documentation: Reliability and the Write-Ahead Log](https://www.postgresql.org/docs/current/wal.html)
+
 次章では、tableやrowの土台となるリレーショナルモデルへ進みます。論理的なデータ設計と、indexなどの物理設計を切り分けます。

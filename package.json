@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
-    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
+    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
+    "check:content": "node scripts/validate-content.mjs",
+    "check": "bun run check:content && bun run build"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.7",

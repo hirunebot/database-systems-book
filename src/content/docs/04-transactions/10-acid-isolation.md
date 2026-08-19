@@ -405,6 +405,6 @@ Snapshot Isolation型のRepeatable Readではwrite skewが残る可能性があ�
 - [PostgreSQL Documentation: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
 - [MySQL Documentation: InnoDB Transaction Isolation Levels](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html)
 - [Hal Berenson et al., “A Critique of ANSI SQL Isolation Levels”](https://doi.org/10.1145/223784.223785)
-- [Martin Kleppmann et al., “A Critique of Snapshot Isolation” に関連する Adya thesis](https://publications.csail.mit.edu/lcs/pubs/pdf/MIT-LCS-TR-786.pdf)
+- [Atul Adya, “Weak Consistency: A Generalized Theory and Optimistic Implementations for Distributed Transactions”](https://publications.csail.mit.edu/lcs/pubs/pdf/MIT-LCS-TR-786.pdf)
 
 次章では、これらの保証を実現するlock、MVCC、2PL、SSI、楽観・悲観的並行性制御を扱います。
