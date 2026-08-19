@@ -30,6 +30,10 @@ export default defineConfig({
           label: 'Part III — クエリ処理',
           items: [{ autogenerate: { directory: '03-query-processing' } }],
         },
+        {
+          label: 'Part IV — トランザクションと障害回復',
+          items: [{ autogenerate: { directory: '04-transactions' } }],
+        },
       ],
     }),
   ],
