@@ -1,0 +1,49 @@
+---
+title: Database Systems Book
+description: Webアプリケーション開発者のための、仕組みから学ぶデータベースシステム入門
+template: splash
+hero:
+  tagline: SQLの向こう側で何が起きているのかを、ストレージから分散トランザクションまで一つの流れとして学ぶ。
+  actions:
+    - text: 第1章を読む
+      link: /01-foundations/01-overview/
+      icon: right-arrow
+      variant: primary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## この本で目指すこと
+
+データベースを「SQLを送る保存先」ではなく、複数の機構がトレードオフを取りながら協調するシステムとして理解します。1件の注文が保存され、検索され、競合を解決し、障害から復旧し、別ノードへ複製されるまでを段階的に追跡します。
+
+<CardGrid>
+  <Card title="Part I — データベースを捉える">
+    リレーショナルモデルと、SQLからストレージまでの全体像を整理します。
+  </Card>
+  <Card title="Part II — ストレージとインデックス">
+    ページ、バッファプール、B+tree、ハッシュ、LSM-treeを扱います。
+  </Card>
+  <Card title="Part III — クエリ処理">
+    SQL、論理・物理実行計画、join、コストベース最適化をつなぎます。
+  </Card>
+  <Card title="Part IV — トランザクションと障害回復">
+    ACID、MVCC、lock、WAL、checkpoint、redo/undoを理解します。
+  </Card>
+  <Card title="Part V — 分散データベース">
+    replication、consensus、Raft、sharding、分散トランザクションへ進みます。
+  </Card>
+  <Card title="Part VI — アプリケーションと実運用">
+    接続、migration、監視、backup、failoverを実装判断へ結びつけます。
+  </Card>
+</CardGrid>
+
+## 想定読者
+
+- Webアプリケーションを実装した経験があり、SQLの基本構文を知っている
+- 実行計画、ロック、レプリカ遅延などの知識を一つの体系として整理したい
+- 特定製品の操作方法だけでなく、別のDBにも応用できる原理を身につけたい
+
+## 読み方
+
+初めてDB内部を学ぶ場合は、第1章から順に進んでください。各章は「問い、メンタルモデル、具体例、内部処理、トレードオフ、観察、確認問題」の順に構成します。特定の障害や性能問題を調べる場合は、サイドバーと全文検索から該当章へ直接移動できます。

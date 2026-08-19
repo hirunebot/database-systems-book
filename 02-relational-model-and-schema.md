@@ -1,0 +1,32 @@
+# 02. リレーショナルモデルとスキーマ
+
+## この章の役割
+
+SQLの表面的な構文より一段下にあるリレーショナルモデルを整理し、論理的なデータ設計と物理的な格納方法を混同しないための土台を作る。
+
+## この章で答える問い
+
+- relation、tuple、attributeはSQLのtable、row、columnと完全に同じなのか
+- primary key、foreign key、unique constraintは何を保証するのか
+- 正規化と非正規化は、どの問題に対する判断なのか
+
+## 扱う内容
+
+- relation、tuple、attribute、domain、NULLの意味
+- candidate key、primary key、natural key、surrogate key
+- entity integrityとreferential integrity
+- functional dependencyと第1〜第3正規形の直感
+- denormalizationの目的と更新不整合のリスク
+- 論理スキーマと物理設計、インデックスの責務の違い
+
+## 図解・具体例
+
+注文・顧客・注文明細を題材に、未正規化データから制約のあるスキーマへ段階的に変換する。
+
+## 演習・確認課題
+
+重複を含む注文データから関数従属性を見つけ、正規化案と読み取り優先の非正規化案を比較する。
+
+## 読了時の到達目標
+
+制約がアプリケーションのバリデーションとどう異なるかを説明し、論理設計と性能上の物理設計を分けて議論できる。

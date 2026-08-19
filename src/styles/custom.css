@@ -1,0 +1,51 @@
+:root {
+  --sl-color-accent-low: #0c3431;
+  --sl-color-accent: #36c7a7;
+  --sl-color-accent-high: #b7f5e6;
+  --sl-color-white: #f4fbf9;
+  --sl-color-gray-1: #e6f1ef;
+  --sl-color-gray-2: #b8c9c5;
+  --sl-color-gray-3: #81948f;
+  --sl-color-gray-4: #4f625e;
+  --sl-color-gray-5: #2f413d;
+  --sl-color-gray-6: #1c2b28;
+  --sl-color-black: #101916;
+  --sl-content-width: 52rem;
+  --sl-text-base: 1rem;
+  --sl-font: Inter, 'Hiragino Sans', 'Yu Gothic UI', 'Yu Gothic', sans-serif;
+  --sl-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d8f6ed;
+  --sl-color-accent: #087d68;
+  --sl-color-accent-high: #075546;
+  --sl-color-white: #152521;
+  --sl-color-gray-1: #293b36;
+  --sl-color-gray-2: #435650;
+  --sl-color-gray-3: #687a75;
+  --sl-color-gray-4: #9baaa6;
+  --sl-color-gray-5: #d2dcda;
+  --sl-color-gray-6: #edf2f1;
+  --sl-color-gray-7: #f7faf9;
+  --sl-color-black: #ffffff;
+}
+
+.sl-markdown-content {
+  line-height: 1.9;
+}
+
+.sl-markdown-content h2 {
+  margin-top: 2.75rem;
+}
+
+.sl-markdown-content table {
+  font-size: 0.94rem;
+}
+
+@media (max-width: 30rem) {
+  .site-title {
+    font-size: 1rem;
+    letter-spacing: -0.02em;
+  }
+}
