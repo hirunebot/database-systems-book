@@ -1,66 +1,66 @@
 ---
 title: 07. 物理実行と演算子
-description: scan、sort、aggregation、pipeline、materialization、vectorized executionがdataを処理する方法を理解する。
+description: 走査、ソート、集約、パイプライン、実体化、ベクトル化実行がデータを処理する方法を理解する。
 sidebar:
   order: 7
   label: 07. 物理実行と演算子
 ---
 
-Logical planが同じでも、tableを順に読むかindexをたどるか、rowを1件ずつ渡すかbatchで渡すかによって性能は変わります。Physical planは、論理演算を具体的なalgorithmとaccess pathへ落としたものです。
+論理計画が同じでも、表を順に読むかインデックスをたどるか、行を1件ずつ渡すか一括で渡すかによって性能は変わります。物理計画は、論理演算を具体的なアルゴリズムとアクセス経路へ落としたものです。
 
-この章では、join以外の主要operatorと、operator間でdataを受け渡す実行modelを扱います。
+この章では、結合以外の主要演算子と、演算子間でデータを受け渡す実行モデルを扱います。
 
 ## この章で答える問い
 
-- Table scan、index scan、index-only scan、bitmap scanは何を読むのか
-- Iterator modelとvectorized executionは何が違うのか
-- Pipeliningとmaterializationは、latencyとmemoryをどう変えるのか
-- Sortやaggregationがmemoryへ収まらないと何が起きるのか
-- Parallel executionは、どこまで処理を分割できるのか
+- 表走査、インデックス走査、インデックスのみの走査、ビットマップ走査は何を読むのか
+- イテレーター モデルとベクトル化実行は何が違うのか
+- パイプライン処理と実体化は、遅延時間とメモリをどう変えるのか
+- ソートや集約がメモリへ収まらないと何が起きるのか
+- 並列実行は、どこまで処理を分割できるのか
 
-## physical plan
+## 物理計画
 
-次のlogical planを考えます。
+次の論理計画を考えます。
 
 ```text
-Aggregate by customer_id
-  Filter status = 'confirmed'
-    Scan orders
+customer_idで集約
+  絞り込み状態 = '確定済み'
+    ordersを走査
 ```
 
-Physical planの候補には、少なくとも次があります。
+物理計画の候補には、少なくとも次があります。
 
 ```mermaid
 flowchart LR
-    subgraph PlanA["Plan A"]
-        A1["Sequential Scan"] --> A2["Filter"] --> A3["Hash Aggregate"]
+    subgraph PlanA["計画A"]
+        A1["順次走査"] --> A2["絞り込み"] --> A3["ハッシュ集約"]
     end
-    subgraph PlanB["Plan B"]
-        B1["Index Scan"] --> B2["Sort"] --> B3["Group Aggregate"]
+    subgraph PlanB["計画B"]
+        B1["インデックス走査"] --> B2["ソート"] --> B3["グループ集約"]
     end
 ```
 
-同じ結果を返しますが、読むpage、memory、CPU、startup costが違います。
+同じ結果を返しますが、読むページ、メモリ、CPU、起動コストが違います。
 
-## scan operator
+## 走査演算子
 
-### sequential / table scan
+### 順次 / 表走査
 
-Tableのdata pageを順番に読み、各recordへpredicateを適用します。
+表のデータページを順番に読み、各レコードへ述語を適用します。
 
 向いている状況：
 
-- tableの大部分を読む
-- 利用可能なindexがない
-- sequential I/Oが効率的
-- parallel scanで範囲を分担できる
-- 必要columnがtableにまとまっている
+- 表の大部分を読む
+- 利用可能なインデックスがない
+- 順次I/Oが効率的
+- 並列走査で範囲を分担できる
+- 必要列が表にまとまっている
 
-Table scanは「遅い計画」ではありません。100万rowのうち80万rowを返すなら、indexとtableを往復するより合理的です。
+表走査は「遅い計画」ではありません。100万行のうち80万行を返すなら、インデックスと表を往復するより合理的です。
 
-### index scan
+### インデックス走査
 
-Index conditionに合うentryを探し、必要ならtable rowを読みます。
+インデックス条件に合う項目を探し、必要なら表行を読みます。
 
 ```sql
 SELECT *
@@ -68,43 +68,43 @@ FROM orders
 WHERE customer_id = 42;
 ```
 
-対象rowが少なく、table page accessも少ない場合に有利です。Index entry順とtable物理順のcorrelationが低いとrandom accessが増えます。
+対象行が少なく、表ページアクセスも少ない場合に有利です。インデックス項目順と表物理順の相関が低いとランダムアクセスが増えます。
 
-### index-only scan
+### インデックスのみの走査
 
-必要columnがindexへ含まれ、visibilityもindexまたは補助情報で判断できればtable accessを省略します。
+必要列がインデックスへ含まれ、可視性もインデックスまたは補助情報で判断できれば表アクセスを省略します。
 
-Indexが小さくcacheされているread-heavy workloadでは大きな改善になりますが、wide covering indexの維持costも考えます。
+インデックスが小さくキャッシュされている読み取り中心の処理負荷では大きな改善になりますが、幅広いカバリングインデックスの維持コストも考えます。
 
-### bitmap scan
+### ビットマップ走査
 
-複数indexや多数のmatching entryから、読むべきtable pageの集合をbitmapとして作ります。
+複数インデックスや多数の一致項目から、読むべき表ページの集合をビットマップとして作ります。
 
 ```mermaid
 flowchart LR
-    I1["Index A"] --> BM["Page bitmap"]
-    I2["Index B"] --> BM
-    BM --> Sort["Page順へ整理"]
-    Sort --> Heap["Table pagesを読む"]
+    I1["インデックスA"] --> BM["ページビットマップ"]
+    I2["インデックスB"] --> BM
+    BM --> Sort["ページ順へ整理"]
+    Sort --> Heap["表ページを読む"]
 ```
 
-Row pointer順に即座にtableへ飛ぶ代わりにpage単位でまとめ、random I/Oを減らします。複数indexのAND/ORも組み合わせられます。一方、bitmap構築memoryとstartup costが必要です。
+行ポインター順に即座に表へ飛ぶ代わりにページ単位でまとめ、ランダムI/Oを減らします。複数インデックスのAND/ORも組み合わせられます。一方、ビットマップ構築メモリと起動コストが必要です。
 
-## filter、projection、limit
+## 絞り込み、射影、上限
 
-### filter
+### 絞り込み
 
-入力rowごとにpredicateを評価します。Index conditionとして処理できなかった条件や、functionを含む条件がresidual filterとして残ります。
+入力行ごとに述語を評価します。インデックス条件として処理できなかった条件や、関数を含む条件が残余フィルターとして残ります。
 
-EXPLAIN ANALYZEでは「何row読んで、何rowをfilterで捨てたか」が重要です。大量に読んで大部分を捨てているなら、より早い段階で絞れるaccess pathを検討します。
+EXPLAIN解析では「何行読んで、何行を絞り込みで捨てたか」が重要です。大量に読んで大部分を捨てているなら、より早い段階で絞れるアクセス経路を検討します。
 
-### projection
+### 射影
 
-必要columnだけを出力します。Logicalには単純でも、expression、cast、JSON構築、user-defined functionがあるとCPU costが増えます。
+必要列だけを出力します。論理には単純でも、式、型変換、JSON構築、ユーザー定義関数があるとCPUコストが増えます。
 
-### limit
+### 上限
 
-LIMITは必要件数へ達したら上流を止められる場合があります。
+上限は必要件数へ達したら上流を止められる場合があります。
 
 ```sql
 SELECT id, ordered_at
@@ -114,220 +114,220 @@ ORDER BY ordered_at DESC
 LIMIT 20;
 ```
 
-ORDER BYと一致するindexがあれば20件で停止できます。一致しなければ全候補をsortしてから20件を選ぶ可能性があります。Top-N heapで全sortを避けられる実装もあります。
+ORDER BYと一致するインデックスがあれば20件で停止できます。一致しなければ全候補をソートしてから20件を選ぶ可能性があります。Top-Nヒープで全ソートを避けられる実装もあります。
 
-## Iterator / Volcano model
+## イテレーター / Volcanoモデル
 
-古典的な実行modelでは、各operatorがnext()相当のinterfaceを持ち、親operatorが子へ次のrowを要求します。
+古典的な実行モデルでは、各演算子が次()相当のインターフェースを持ち、親演算子が子へ次の行を要求します。
 
 ```mermaid
 sequenceDiagram
-    participant Limit
-    participant Filter
-    participant Scan
-    Limit->>Filter: next()
-    Filter->>Scan: next()
-    Scan-->>Filter: row
-    Filter-->>Limit: matching row
+    participant Limit as 件数制限
+    participant Filter as 絞り込み
+    participant Scan as 走査
+    Limit->>Filter: 次()
+    Filter->>Scan: 次()
+    Scan-->>Filter: 行
+    Filter-->>Limit: 一致行
 ```
 
 利点：
 
-- operatorを組み合わせやすい
-- 1 rowずつpipelineできる
-- LIMITなどが早く停止できる
-- 中間結果全体をmemoryへ置かなくてよい
+- 演算子を組み合わせやすい
+- 1行ずつパイプラインできる
+- 上限などが早く停止できる
+- 中間結果全体をメモリへ置かなくてよい
 
 欠点：
 
-- rowごとのfunction callやbranch cost
-- CPU cacheとSIMDを使いにくい
-- columnar dataを小さな単位で処理してしまう
+- 行ごとの関数呼び出しや分岐コスト
+- CPUキャッシュとSIMDを使いにくい
+- 列指向データを小さな単位で処理してしまう
 
-## vectorized execution
+## ベクトル化実行
 
-Vectorized executionは、1 rowではなく数百〜数千rowのbatch/vectorをoperator間で渡します。
+ベクトル化実行は、1行ではなく数百〜数千行の一括/ベクトルを演算子間で渡します。
 
 ```mermaid
 flowchart LR
-    Scan["Scan<br/>1024 rows"] --> Filter["Filter vector"]
-    Filter --> Project["Project vector"]
-    Project --> Agg["Aggregate vector"]
+    Scan["走査<br/>1024行"] --> Filter["絞り込みベクトル"]
+    Filter --> Project["射影ベクトル"]
+    Project --> Agg["集約ベクトル"]
 ```
 
-同じ処理を連続dataへ適用するため、function callを減らし、CPU cache、branch prediction、SIMDを利用しやすくなります。Column-oriented storageと特に相性がよいですが、row storeでもbatch executionを採用できます。
+同じ処理を連続データへ適用するため、関数呼び出しを減らし、CPUキャッシュ、分岐予測、SIMDを利用しやすくなります。列指向ストレージと特に相性がよいですが、行保存でも一括実行を採用できます。
 
-Batchを大きくすると効率は上がりやすい一方、最初のresultが出るまでのstartup latencyやworking memoryが増えます。
+一括を大きくすると効率は上がりやすい一方、最初の結果が出るまでの起動遅延時間や作業メモリが増えます。
 
-## push-based execution
+## プッシュ型実行
 
-Iteratorのpullとは逆に、子operatorが生成したbatchを親へpushするmodelもあります。Operator fusionによってfilterとprojectionを一つのcompiled loopへまとめる実装もあります。
+イテレーターのプルとは逆に、子演算子が生成した一括を親へプッシュするモデルもあります。演算子の融合によって絞り込みと射影を一つのコンパイル済みループへまとめる実装もあります。
 
-Query compilationはvirtual functionやinterpretation overheadを減らせますが、compile time、code cache、複雑性が増えます。短いOLTP queryではcompile costが相対的に大きくなる場合があります。
+クエリのコンパイルは仮想関数や解釈オーバーヘッドを減らせますが、コンパイル時間、コードキャッシュ、複雑性が増えます。短いOLTPクエリではコンパイルコストが相対的に大きくなる場合があります。
 
-## pipeliningとmaterialization
+## パイプライン処理と実体化
 
-### pipelining
+### パイプライン処理
 
-Operatorがrow/batchを生成したら、全入力を待たずに次へ渡します。
+演算子が行/一括を生成したら、全入力を待たずに次へ渡します。
 
-- 最初のresultを早く返せる
+- 最初の結果を早く返せる
 - 中間結果全体を保持しなくてよい
-- LIMITで上流を早く停止できる
+- 上限で上流を早く停止できる
 
-### materialization
+### 実体化
 
-中間結果をmemoryまたはtemporary storageへ一度保存します。
+中間結果をメモリまたは一時的なストレージへ一度保存します。
 
 - 同じ結果を複数回再利用できる
-- pipelineの境界を作る
-- rewindが必要なoperatorを支える
-- memoryを超えるとdisk I/Oが増える
+- パイプラインの境界を作る
+- 巻き戻しが必要な演算子を支える
+- メモリを超えるとディスクI/Oが増える
 
-Sort、hash table build、duplicate eliminationなど、全入力または大部分を必要とするoperatorをpipeline breaker/blocking operatorと呼びます。
+ソート、ハッシュ表構築、重複除去など、全入力または大部分を必要とする演算子をパイプライン阻害演算子/処理停止演算子と呼びます。
 
 ```mermaid
 flowchart LR
-    Scan --> Filter --> Sort["Sort<br/>blocking"] --> Limit
+    Scan --> Filter --> Sort["ソート<br/>処理停止"] --> Limit
 ```
 
-Sortは通常、入力を受け取り終えるまで最小rowを確定できません。
+ソートは通常、入力を受け取り終えるまで最小行を確定できません。
 
-## sort
+## ソート
 
-### in-memory sort
+### メモリ内ソート
 
-入力がmemoryへ収まれば、quicksort、timsort、heapなど実装に適したalgorithmで並べます。Fixed-length keyやradix sortを利用するengineもあります。
+入力がメモリへ収まれば、クイックソート、ティムソート、ヒープなど実装に適したアルゴリズムで並べます。固定長キーや基数ソートを利用するエンジンもあります。
 
-### external merge sort
+### 外部マージソート
 
-入力がmemoryを超える場合、次の手順でdiskを使います。
+入力がメモリを超える場合、次の手順でディスクを使います。
 
-1. Memoryへ収まるchunkを読む
-2. Chunkをsortしてtemporary runへ書く
-3. 複数runをmulti-way mergeする
+1. メモリへ収まるチャンクを読む
+2. チャンクをソートして一時ランへ書く
+3. 複数ランを多方向マージする
 
 ```mermaid
 flowchart TB
-    Input["Large input"] --> R1["Sorted run 1"]
-    Input --> R2["Sorted run 2"]
-    Input --> R3["Sorted run 3"]
-    R1 --> Merge["K-way merge"]
+    Input["大規模入力"] --> R1["整列済みラン1"]
+    Input --> R2["整列済みラン2"]
+    Input --> R3["整列済みラン3"]
+    R1 --> Merge["K方向マージ"]
     R2 --> Merge
     R3 --> Merge
-    Merge --> Output["Sorted output"]
+    Merge --> Output["整列済み出力"]
 ```
 
-Memoryが少ないとrun数とmerge passが増え、temporary I/Oが増えます。EXPLAINでsort method、memory、disk spillを確認できる製品があります。
+メモリが少ないとラン数とマージ回数が増え、一時的なI/Oが増えます。EXPLAINでソート方式、メモリ、ディスク退避を確認できる製品があります。
 
-## aggregation
+## 集約
 
-### hash aggregation
+### ハッシュ集約
 
-Group keyをhash tableのkeyとし、aggregate stateを更新します。
+グループキーをハッシュ表のキーとし、集約状態を更新します。
 
 ```text
-customer_id → { count, sum, min, max ... }
+customer_id → { 件数, 合計, 最小, 最大 ... }
 ```
 
-入力が未sortでも1 passで処理しやすい一方、group数が多くhash tableがmemoryを超えるとpartition/spillが必要です。
+入力が未ソートでも1回の走査で処理しやすい一方、グループ数が多くハッシュ表がメモリを超えるとパーティション/ディスク退避が必要です。
 
-### sort/group aggregation
+### ソート/グループ集約
 
-Group key順に入力をsortし、同じkeyが連続する間aggregateします。入力がすでにindexや上流operatorによってsort済みなら、追加sortなしで少ないstateだけ保持できます。
+グループキー順に入力をソートし、同じキーが連続する間集約します。入力がすでにインデックスや上流演算子によってソート済みなら、追加ソートなしで少ない状態だけ保持できます。
 
-| 観点 | Hash aggregate | Sort/group aggregate |
+| 観点 | ハッシュ集約 | ソート/グループ集約 |
 | --- | --- | --- |
-| 入力順 | 不要 | group key順が必要 |
-| memory | group数に比例 | 現在group中心 |
-| 既存sortの利用 | しない | 利用できる |
-| spill | hash partition | external sort |
-| 出力順 | 未保証 | group key順になり得る |
+| 入力順 | 不要 | グループキー順が必要 |
+| メモリ | グループ数に比例 | 現在グループ中心 |
+| 既存ソートの利用 | しない | 利用できる |
+| ディスク退避 | ハッシュパーティション | 外部ソート |
+| 出力順 | 未保証 | グループキー順になり得る |
 
-## memory budgetとspill
+## メモリ上限とディスク退避
 
-Sort、hash aggregate、hash joinはquery-local memoryを使います。設定値を大きくするとspillを減らせますが、同時query数を掛け合わせる必要があります。
+ソート、ハッシュ集約、ハッシュ結合はクエリ-局所メモリを使います。設定値を大きくするとディスク退避を減らせますが、同時クエリ数を掛け合わせる必要があります。
 
 ```text
-potential memory
-≈ concurrent queries
-× memory-intensive operators per query
-× operator memory limit
+必要になり得るメモリ
+≈ 並行クエリ数
+× クエリ当たりのメモリ負荷が高い演算子数
+× 演算子メモリ上限
 ```
 
-1 queryに1 GiBを与えて速くなっても、100 queryが同時実行されればmemory pressureやOOMを起こし得ます。Per-query最適化とsystem全体のcapacityは別です。
+1クエリに1 GiBを与えて速くなっても、100クエリが同時実行されればメモリ圧迫やOOMを起こし得ます。クエリごとの最適化とシステム全体の容量は別です。
 
-## parallel execution
+## 並列実行
 
-大きなscanやaggregationは複数workerへ分割できます。
+大きな走査や集約は複数ワーカーへ分割できます。
 
 ```mermaid
 flowchart TB
-    Scan["Table"] --> W1["Worker 1"]
-    Scan --> W2["Worker 2"]
-    Scan --> W3["Worker 3"]
-    W1 --> Gather["Gather / Merge"]
+    Scan["表"] --> W1["ワーカー 1"]
+    Scan --> W2["ワーカー 2"]
+    Scan --> W3["ワーカー 3"]
+    W1 --> Gather["集約 / マージ"]
     W2 --> Gather
     W3 --> Gather
 ```
 
-Parallelismには次のoverheadがあります。
+並列度には次のオーバーヘッドがあります。
 
-- worker起動とscheduling
-- data分配・再partition
-- partial resultのmerge
-- shared resource contention
-- NUMA・cache locality
+- ワーカー起動とスケジューリング
+- データ分配・再パーティション
+- 部分的結果のマージ
+- 共有資源競合
+- NUMA・キャッシュ局所性
 
-小さなqueryではserialのほうが速いことがあります。また、volatile function、lock、順序要件などでparallel化できないoperatorもあります。
+小さなクエリでは直列のほうが速いことがあります。また、揮発性関数、ロック、順序要件などで並列化できない演算子もあります。
 
-Distributed DBではworkerが別nodeに広がり、network exchangeがphysical operatorとして加わります。
+分散DBではワーカーが別ノードに広がり、ネットワーク交換が物理演算子として加わります。
 
-## operatorを読む順序
+## 演算子を読む順序
 
-EXPLAIN ANALYZEを見るときは、次を確認します。
+EXPLAIN解析を見るときは、次を確認します。
 
-1. Leaf scanで何row/page読んだか
-2. Filterで何row捨てたか
-3. 推定rowと実rowが最初にずれた場所
-4. Sort/hashがmemoryへ収まったか
-5. Loop回数を掛けた総仕事量
-6. Parallel workerの分担と偏り
-7. 上位operatorへ渡るrow幅
+1. 葉走査で何行/ページ読んだか
+2. 絞り込みで何行捨てたか
+3. 推定行と実行が最初にずれた場所
+4. ソート/ハッシュがメモリへ収まったか
+5. ループ回数を掛けた総仕事量
+6. 並列ワーカーの分担と偏り
+7. 上位演算子へ渡る行幅
 
-最上位のtotal timeだけでなく、dataが増えた最初のoperatorを探します。
+最上位の合計時間だけでなく、データが増えた最初の演算子を探します。
 
 ## よくある誤解
 
-### 「sequential scanが出たのでindexが足りない」
+### 「順次走査が出たのでインデックスが足りない」
 
-対象割合が高い、tableが小さい、index lookupがrandom、statisticsがそう推定したなど合理的な理由があります。
+対象割合が高い、表が小さい、インデックス参照がランダム、統計情報がそう推定したなど合理的な理由があります。
 
-### 「memory設定は大きいほどよい」
+### 「メモリ設定は大きいほどよい」
 
-Operator単位・query単位・connection単位で使われる可能性があり、concurrencyとの積で考えます。
+演算子単位・クエリ単位・接続単位で使われる可能性があり、同時実行性との積で考えます。
 
-### 「parallel workerを増やせば線形に速くなる」
+### 「並列ワーカーを増やせば線形に速くなる」
 
-Serial部分、merge、I/O帯域、contention、skewによってspeedupは頭打ちになります。
+直列部分、マージ、I/O帯域、競合、偏りによって高速化率は頭打ちになります。
 
 ## まとめ
 
-- Physical planはlogical operatorを具体的なaccess pathとalgorithmへ落とす
-- Table/index/index-only/bitmap scanは読むpageとstartup costが異なる
-- Iterator modelはcomposabilityとpipelineに優れ、vectorized executionはCPU効率を上げる
-- Pipeliningはlatencyとmemoryを抑え、materializationは再利用やblocking処理を支える
-- Sortとhash aggregateはmemoryを超えるとtemporary storageへspillする
-- Per-operator memoryはconcurrencyとの積でcapacityを考える
-- Parallel executionには分配・merge・contentionのoverheadがある
+- 物理計画は論理演算子を具体的なアクセス経路とアルゴリズムへ落とす
+- 表/インデックス/インデックス-のみ/ビットマップ走査は読むページと起動コストが異なる
+- イテレーター モデルは合成可能性とパイプラインに優れ、ベクトル化実行はCPU効率を上げる
+- パイプライン処理は遅延時間とメモリを抑え、実体化は再利用や処理停止処理を支える
+- ソートとハッシュ集約はメモリを超えると一時的なストレージへディスク退避する
+- 演算子ごとのメモリは同時実行性との積で容量を考える
+- 並列実行には分配・マージ・競合のオーバーヘッドがある
 
 ## 確認問題
 
-1. Tableの60%を読むqueryでsequential scanが有利になり得る理由を説明してください。
-2. Bitmap scanが通常のindex scanよりtable page accessをまとめられる仕組みは何ですか。
-3. Sortがpipeline breakerになる理由を説明してください。
-4. Hash aggregationとsort aggregationをmemoryと入力順から比較してください。
-5. Per-query memoryを増やす前にconcurrencyを確認する必要があるのはなぜですか。
+1. 表の60%を読むクエリで順次走査が有利になり得る理由を説明してください。
+2. ビットマップ走査が通常のインデックス走査より表ページアクセスをまとめられる仕組みは何ですか。
+3. ソートがパイプライン阻害演算子になる理由を説明してください。
+4. ハッシュ集約とソート集約をメモリと入力順から比較してください。
+5. クエリごとのメモリを増やす前に同時実行性を確認する必要があるのはなぜですか。
 
 ## 参考資料
 
@@ -335,4 +335,4 @@ Serial部分、merge、I/O帯域、contention、skewによってspeedupは頭打
 - [PostgreSQL Documentation: Planner Method Configuration](https://www.postgresql.org/docs/current/runtime-config-query.html)
 - [Goetz Graefe, “Volcano—An Extensible and Parallel Query Evaluation System”](https://doi.org/10.1109/69.273032)
 
-次章では、physical operatorの中でも特に選択肢とcost差が大きいjoin algorithmを比較します。
+次章では、物理演算子の中でも特に選択肢とコスト差が大きい結合アルゴリズムを比較します。

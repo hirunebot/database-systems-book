@@ -1,25 +1,25 @@
 ---
 title: 16. 分散トランザクション
-description: 2PC、Saga、transactional outbox、CDC、idempotencyを使い、複数resourceにまたがる更新を設計する。
+description: 2PC、Saga、トランザクショナル・アウトボックス、CDC、冪等性を使い、複数資源にまたがる更新を設計する。
 sidebar:
   order: 16
   label: 16. 分散トランザクション
 ---
 
-注文、在庫、決済が別service・別databaseにあると、単一DB transactionでは全変更をまとめられません。一方だけ成功するpartial failure、response消失、retry重複が通常状態として現れます。
+注文、在庫、決済が別サービス・別データベースにあると、単一DBトランザクションでは全変更をまとめられません。一方だけ成功する部分障害、応答消失、再試行重複が通常状態として現れます。
 
-分散transaction設計では「失敗をなくす」のではなく、各失敗点で残る状態と、再実行・補償・運用回復の手順を定義します。
+分散トランザクション設計では「失敗をなくす」のではなく、各失敗点で残る状態と、再実行・補償・運用回復の手順を定義します。
 
 ## この章で答える問い
 
-- Atomic commitとconsensusは何が違うのか
-- 2PCのprepareはparticipantへ何を約束させるのか
-- Coordinator failureでtransactionがin-doubtになるのはなぜか
-- SagaはACID transactionの単純な代替なのか
-- DB更新とmessage publishのdual-write問題をoutboxでどう解くのか
-- At-least-once deliveryをidempotencyでどう安全に扱うのか
+- 原子的なコミットと合意は何が違うのか
+- 2PCの準備は参加者へ何を約束させるのか
+- 調整役障害でトランザクションが結果未確定になるのはなぜか
+- SagaはACIDトランザクションの単純な代替なのか
+- DB更新とメッセージ送信の二重書き込み問題をアウトボックスでどう解くのか
+- 1回以上配信を冪等性でどう安全に扱うのか
 
-## localとdistributed transaction
+## 局所と分散トランザクション
 
 単一DBでは：
 
@@ -30,210 +30,210 @@ INSERT INTO orders (...) VALUES (...);
 COMMIT;
 ```
 
-DBMSが一つのWAL、lock/MVCC、recoveryでatomicityを提供します。
+DBMSが一つのWAL、ロック/MVCC、復旧で原子性を提供します。
 
-別resourceの場合：
+別資源の場合：
 
 ```text
-Inventory DB: decrement stock
-Order DB:     create order
-Payment API:  capture money
-Message bus:  publish OrderConfirmed
+在庫DB: 在庫を減らす
+注文DB:     注文を作成
+支払いAPI:  代金を確定
+メッセージバス:  注文確定を送信
 ```
 
-各systemのfailureとcommit pointが独立します。
+各システムの障害とコミット境界は独立しています。
 
-## dual-write problem
+## 二重書き込み問題
 
-Applicationが二つのsystemへ順にwriteします。
+アプリケーションが二つのシステムへ順に書き込みします。
 
 ```mermaid
 sequenceDiagram
-    participant App
-    participant DB
-    participant Broker
-    App->>DB: COMMIT order
-    DB-->>App: success
-    App->>Broker: publish event
-    Note over App,Broker: crash / timeout
+    participant App as アプリケーション
+    participant DB as データベース
+    participant Broker as メッセージブローカー
+    App->>DB: コミット注文
+    DB-->>App: 成功
+    App->>Broker: イベントを送信
+    Note over App,Broker: クラッシュ / タイムアウト
 ```
 
-DB commit後、publish前にcrashするとorderはあるのにeventがありません。逆順ならeventはあるのにDB rollbackという状態が起きます。
+DBコミット後、送信前にクラッシュすると注文はあるのにイベントがありません。逆順ならイベントはあるのにDBロールバックという状態が起きます。
 
-Retryだけでは解決しません。Publish成功後にresponseを失うとduplicate publishになるためです。
+再試行だけでは解決しません。送信成功後に応答を失うと重複送信になるためです。
 
-## atomic commit
+## 原子的なコミット
 
-複数participantがtransactionをcommitするかabortするか、一つのdecisionへ従うprotocolです。
+複数参加者がトランザクションをコミットするか中止するか、一つの決定へ従うプロトコルです。
 
 望む性質：
 
-- 全participantがcommit、または全員abort
-- Commitしたparticipantとabortしたparticipantが混在しない
-- Participant crash/recovery後もdecisionを守る
+- 全参加者がコミット、または全員中止
+- コミットした参加者と中止した参加者が混在しない
+- 参加者クラッシュ/復旧後も決定を守る
 
-代表がTwo-Phase Commit（2PC）です。
+代表が二相コミット（2PC）です。
 
-## Two-Phase Commit
+## 二相コミット
 
-Role：
+ロール：
 
-- **Coordinator**：transaction decisionを進める
-- **Participant**：各resourceのlocal transactionを実行する
+- **調整役**：トランザクションの決定を進める
+- **参加者**：各資源の局所トランザクションを実行する
 
-### Phase 1: prepare / vote
+### 段階1: 準備 / 投票
 
-Coordinatorが各participantへPREPAREを送り、commit可能かvoteさせます。
+調整役が各参加者へ準備を送り、コミット可能か投票させます。
 
-ParticipantがYESと答える前に：
+参加者がYESと答える前に：
 
-- Local constraintを検査
-- 必要lockを保持
-- Redo/undoとprepared stateをdurable logへ書く
-- Coordinator decisionを待てる状態にする
+- 局所制約を検査
+- 必要ロックを保持
+- 再実行/取り消しと準備済み状態を永続化済みログへ書く
+- 調整役決定を待てる状態にする
 
-YESは「今commitした」ではなく、「後でCOMMIT命令が来たら必ずcommitでき、ABORTならrollbackできる」という約束です。
+YESは「今コミットした」ではなく、「後でコミット命令が来たら必ずコミットでき、中止ならロールバックできる」という約束です。
 
-### Phase 2: decision
+### 段階2: 決定
 
-- 全participantがYES：CoordinatorはCOMMITをdurableに記録して通知
-- 一つでもNO/timeout：ABORTを記録して通知
+- 全参加者がYES：調整役はコミットを永続化済みに記録して通知
+- 一つでもNO/タイムアウト：中止を記録して通知
 
 ```mermaid
 sequenceDiagram
-    participant C as Coordinator
-    participant I as Inventory DB
-    participant O as Order DB
-    C->>I: PREPARE T42
-    C->>O: PREPARE T42
-    I-->>C: YES (durable prepared)
-    O-->>C: YES (durable prepared)
-    C->>C: log COMMIT T42
-    C->>I: COMMIT T42
-    C->>O: COMMIT T42
-    I-->>C: ACK
-    O-->>C: ACK
+    participant C as 調整役
+    participant I as 在庫DB
+    participant O as 注文DB
+    C->>I: 準備T42
+    C->>O: 準備T42
+    I-->>C: YES (永続化済みの準備状態)
+    O-->>C: YES (永続化済みの準備状態)
+    C->>C: ログコミットT42
+    C->>I: コミットT42
+    C->>O: コミットT42
+    I-->>C: 確認応答
+    O-->>C: 確認応答
 ```
 
-## prepared transaction
+## 準備済みトランザクション
 
-Prepare後のparticipantはdecisionを受けるまで次を維持します。
+準備後の参加者は決定を受けるまで次を維持します。
 
-- Lock
-- Undo/redo state
-- Transaction ID
-- Resource reservation
+- ロック
+- 取り消し/再実行状態
+- トランザクションID
+- 資源の予約
 
-通常のconnectionが切れてもprepared stateは残ります。これがatomicityを守る一方、長時間in-doubtになるとほかのtransactionをblockします。
+通常の接続が切れても準備済み状態は残ります。これが原子性を守る一方、長時間結果未確定になるとほかのトランザクションを停止します。
 
-## 2PCのfailure
+## 2PCの障害
 
-### Participantがprepare前にfailure
+### 参加者が準備前に障害
 
-CoordinatorはNO/timeoutとしてabortできます。Participant recovery後もlocal unprepared transactionをrollbackします。
+調整役はNO/タイムアウトとして中止できます。参加者復旧後も局所の未準備トランザクションをロールバックします。
 
-### ParticipantがYES後にfailure
+### 参加者がYES後に障害
 
-Prepared stateはdurableです。Recovery後にcoordinatorへdecisionを問い合わせ、commit/abortします。
+準備済み状態は永続化されます。復旧後に調整役へ決定を問い合わせ、コミット/中止します。
 
-### Coordinatorがdecision前にfailure
+### 調整役が決定前に障害
 
-ParticipantがYESを返していると、自分だけではcommit/abortを決められません。Coordinator recoveryを待つin-doubt/blocking状態になります。
+参加者がYESを返していると、自分だけではコミット/中止を決められません。調整役復旧を待つ結果未確定/処理停止状態になります。
 
 ```mermaid
 flowchart TB
-    P["Participant prepared YES"] --> Q{"Coordinator decision?"}
-    Q -->|"COMMIT log found"| C["Commit"]
-    Q -->|"ABORT log found"| A["Abort"]
-    Q -->|"Unknown / unavailable"| W["Wait; locks retained"]
+    P["参加者準備済みYES"] --> Q{"調整役決定?"}
+    Q -->|"コミットログあり"| C["コミット"]
+    Q -->|"中止ログあり"| A["中止"]
+    Q -->|"不明 / 利用不能"| W["待機; ロックを保持"]
 ```
 
-### CoordinatorがCOMMIT記録後、通知前にfailure
+### 調整役がコミット記録後、通知前に障害
 
-Durable decisionはCOMMITです。Recovery後に再送します。Participantはidempotently同じdecisionを適用します。
+永続化された決定はコミットです。復旧後に再送します。参加者は冪等に同じ決定を適用します。
 
-## 2PCはconsensusではない
+## 2PCは合意ではない
 
-2PC coordinatorを一台だけにすると、そのfailure中はprepared participantがblockします。Raft/Paxosでcoordinator decisionをreplicateすればavailabilityを改善できます。
+2PC調整役を一台だけにすると、その障害中は準備済み参加者が停止します。Raft/Paxosで調整役決定を複製すれば可用性を改善できます。
 
-| 2PC | Consensus |
+| 2PC | 合意 |
 | --- | --- |
-| 複数participantのcommit/abortをatomicに決める | Replicasが一つのordered decisionへ合意する |
-| Participantは異なるresourceを持つ | Participantは同じstate machineを複製することが多い |
-| Coordinator decisionが中心 | Majorityとleader election |
-| Prepared lock/resourceを保持 | Log replicationを進める |
+| 複数参加者のコミット／中止を原子的に決める | レプリカ群が一つの順序付けられた決定へ合意する |
+| 参加者は異なる資源を持つ | 参加者は同じ状態機械を複製することが多い |
+| 調整役決定が中心 | 過半数とリーダー選挙 |
+| 準備済みロック/資源を保持 | ログレプリケーションを進める |
 
-Consensus-backed 2PCでもnetwork partition時のlatency、participant unavailability、lock保持は残ります。
+合意-支えられた2PCでもネットワーク分断時の遅延時間、参加者利用不能、ロック保持は残ります。
 
-## Three-Phase Commit
+## 三相コミット
 
-3PCはprepareとcommitの間にpre-commit phaseを追加し、一定のsynchronous network/failure detector仮定でblockingを減らします。
+3PCは準備とコミットの間に事前コミット段階を追加し、一定の同期ネットワーク/障害検出器仮定で処理停止を減らします。
 
-完全asynchronous network partitionでは安全にnon-blockingを保証できず、実用systemではconsensus-backed coordinatorなど別方式が一般的です。
+完全非同期ネットワーク分断では安全に非停止を保証できず、実用システムでは合意で支えた調整役など別方式が一般的です。
 
-「2PCがblockするので3PCにすれば解決」と単純化しません。
+「2PCが停止するので3PCにすれば解決」と単純化しません。
 
 ## 2PCを使う条件
 
 向いている：
 
-- ParticipantがXA/prepared transactionを支える
-- Atomicityが必須
-- Transactionが短い
-- Participant数が少ない
-- Coordinatorとmonitoringを高可用化
-- Lock holdとfailure時運用を受け入れる
+- 参加者がXA/準備済みトランザクションを支える
+- 原子性が必須
+- トランザクションが短い
+- 参加者数が少ない
+- 調整役と監視を高可用化
+- ロック保持と障害時運用を受け入れる
 
 不向き：
 
-- Human approvalを含む長時間workflow
-- 外部payment/emailのようにprepareできない副作用
-- 高latency cross-region
-- Participant autonomyが高いmicroservices
+- 人による承認を含む長時間ワークフロー
+- 外部支払い/メールのように準備できない副作用
+- 高遅延時間リージョン間
+- 参加者自律性が高いマイクロサービス
 
 ## Saga
 
-Sagaは長いbusiness transactionを複数のlocal transactionへ分け、失敗時にcompensating transactionを実行するpatternです。
+Sagaは長い業務トランザクションを複数の局所トランザクションへ分け、失敗時に補償トランザクションを実行するパターンです。
 
 注文例：
 
 ```text
-T1: Create order
-T2: Reserve inventory
-T3: Authorize payment
-T4: Confirm order
+T1: 注文を作成
+T2: 在庫を予約
+T3: 支払いを与信
+T4: 注文を確定
 
-T3 fails:
-C2: Release inventory
-C1: Cancel order
+T3が失敗:
+C2: 在庫予約を解除
+C1: 注文を取り消し
 ```
 
-各local transactionはcommitして外部から見えるため、Saga全体はisolationを自動提供しません。途中状態をmodelとして許容し、statusとworkflowを明示します。
+各局所トランザクションはコミットして外部から見えるため、Saga全体は分離性を自動提供しません。途中状態をモデルとして許容し、状態とワークフローを明示します。
 
-## compensation
+## 補償
 
-Compensationはbyte-level undoではなく、業務上の逆操作です。
+補償はバイト単位の取り消しではなく、業務上の逆操作です。
 
 - 在庫予約 → 予約解放
-- Payment authorization → void
-- Capture → refund
-- Shipment → return request（発送自体は取り消せない）
-- Email送信 → 取り消せない。訂正email
+- 支払いの与信 → 与信取消
+- キャプチャ → 返金
+- 発送 → 返品依頼（発送自体は取り消せない）
+- メール送信 → 取り消せない。訂正メール
 
-Compensationも失敗・retry・duplicateするためidempotentに設計します。
+補償も失敗・再試行・重複するため冪等に設計します。
 
-既にほかのtransactionが状態を利用している場合、完全に元へ戻せないことがあります。
+既にほかのトランザクションが状態を利用している場合、完全に元へ戻せないことがあります。
 
-## orchestration
+## オーケストレーション
 
-中央orchestratorがstepとstateを管理し、commandを送りresultを受けます。
+中央オーケストレーターが手順と状態を管理し、コマンドを送り結果を受けます。
 
 ```mermaid
 flowchart TB
-    O["Order Saga Orchestrator"]
-    O --> I["Inventory command"]
-    O --> P["Payment command"]
-    O --> S["Shipping command"]
+    O["注文Sagaオーケストレーター"]
+    O --> I["在庫コマンド"]
+    O --> P["支払いコマンド"]
+    O --> S["配送コマンド"]
     I --> O
     P --> O
     S --> O
@@ -241,63 +241,63 @@ flowchart TB
 
 利点：
 
-- Workflowとtimeoutが一か所で見える
-- Compensation順を管理しやすい
-- Monitoring/operationが明確
+- ワークフローとタイムアウトが一か所で見える
+- 補償順を管理しやすい
+- 監視/操作が明確
 
 欠点：
 
-- Orchestratorがcomplex/central coupling
-- State persistenceとhigh availabilityが必要
+- オーケストレーターが複雑化／中央への結合
+- 状態永続化と高可用性が必要
 
-## choreography
+## コレオグラフィ
 
-各serviceがeventを購読し、次eventを発行します。
+各サービスがイベントを購読し、次イベントを発行します。
 
 ```mermaid
 flowchart LR
-    Order["OrderCreated"] --> Inventory["InventoryReserved"]
-    Inventory --> Payment["PaymentAuthorized"]
-    Payment --> Confirm["OrderConfirmed"]
+    Order["注文作成"] --> Inventory["在庫予約済み"]
+    Inventory --> Payment["支払い与信済み"]
+    Payment --> Confirm["注文確定"]
 ```
 
 利点：
 
-- Central coordinatorなし
-- Service autonomy
-- Event-driven integration
+- 中央調整役なし
+- サービスの自律性
+- イベント駆動連携
 
 欠点：
 
-- End-to-end flowが見えにくい
-- Cyclic dependency
-- Event contract変更
-- Compensationとtimeoutの所在が曖昧
+- 端から端までの流れが見えにくい
+- 循環依存
+- イベント契約変更
+- 補償とタイムアウトの所在が曖昧
 
-小さなflowはchoreography、複雑なbusiness processはorchestrationが理解しやすい傾向があります。
+小さな流れはコレオグラフィ、複雑な業務プロセスはオーケストレーションが理解しやすい傾向があります。
 
-## Saga isolation anomaly
+## Saga分離性異常
 
 途中状態が見えるため：
 
-- Dirty/semantic read：まだ最終確定していないorderを別processが使う
-- Lost update：compensationが後続変更を上書き
-- Oversell：複数Sagaがcapacityを同時確認
+- 未書き出し/意味的な読み取り：まだ最終確定していない注文を別処理が使う
+- 更新消失：補償が後続変更を上書き
+- 過剰販売：複数Sagaが容量を同時確認
 
 対策：
 
-- Semantic lock：status=RESERVING中は別operationを制限
-- Version/OCC
-- Escrow/resource reservation
-- Commutative operation
-- Reread/validation
-- Pivot transaction設計
+- 意味的ロック：状態=RESERVING中は別操作を制限
+- バージョン/OCC
+- エスクロー/資源の予約
+- 可換な操作
+- 再読み取り/検証
+- ピボットトランザクション設計
 
-SagaはACID isolationを「不要にする」のではなく、application levelで明示的に扱います。
+SagaはACID分離性を「不要にする」のではなく、アプリケーション層で明示的に扱います。
 
-## transactional outbox
+## トランザクショナル・アウトボックス
 
-DB変更とevent送信のdual writeを避けるため、business rowとoutbox rowを同じlocal transactionでcommitします。
+DB変更とイベント送信の二重書き込みを避けるため、業務行とアウトボックス行を同じ局所トランザクションでコミットします。
 
 ```sql
 BEGIN;
@@ -314,42 +314,42 @@ INSERT INTO outbox (
 COMMIT;
 ```
 
-別relayがoutboxを読みmessage brokerへpublishします。
+別中継処理がアウトボックスを読みメッセージブローカーへ送信します。
 
 ```mermaid
 flowchart LR
-    App["Application transaction"] --> DB["Orders + Outbox"]
-    DB --> Relay["Outbox relay / CDC"]
-    Relay --> Broker["Message broker"]
+    App["アプリケーショントランザクション"] --> DB["注文 + アウトボックス"]
+    DB --> Relay["アウトボックス中継処理 / CDC"]
+    Relay --> Broker["メッセージブローカー"]
 ```
 
-DB commit時点で「publishすべきevent」がdurableになります。Crashしてもrelayが再開できます。
+DBコミット時点で「送信すべきイベント」が永続化済みになります。クラッシュしても中継処理が再開できます。
 
-## outbox delivery
+## アウトボックス配信
 
-Relayがpublish成功後、outboxをprocessedにする前にcrashすると再publishします。
+中継処理が送信成功後、アウトボックスを処理済みにする前にクラッシュすると再送信します。
 
 ```mermaid
 sequenceDiagram
-    participant Relay
-    participant Broker
-    participant DB
-    Relay->>Broker: publish event-9001
-    Broker-->>Relay: ACK
-    Note over Relay: crash before mark processed
-    Relay->>Broker: publish event-9001 again
+    participant Relay as 中継処理
+    participant Broker as メッセージブローカー
+    participant DB as データベース
+    Relay->>Broker: イベント9001を送信
+    Broker-->>Relay: 確認応答
+    Note over Relay: 処理済み記録の前にクラッシュ
+    Relay->>Broker: イベント9001を再送
 ```
 
-Outboxは通常at-least-once publishなのでconsumer deduplicationが必要です。
+アウトボックスは通常1回以上送信なのでコンシューマー 重複排除が必要です。
 
-Polling publisherとCDC方式があります。
+ポーリング型送信処理とCDC方式があります。
 
-- Polling：実装しやすい。Polling latency、locking、batchが必要
-- CDC：DB logから低latencyで取得。Connector運用、schema、orderingが必要
+- ポーリング：実装しやすい。ポーリング遅延時間、ロック制御、一括が必要
+- CDC：DBログから低遅延時間で取得。コネクター運用、スキーマ、順序付けが必要
 
-## inboxとidempotent consumer
+## インボックスと冪等なコンシューマー
 
-Consumerはevent IDをinbox/dedup tableへ記録し、business updateと同じtransactionで処理します。
+コンシューマーはイベントIDをインボックス/重複排除表へ記録し、業務更新と同じトランザクションで処理します。
 
 ```sql
 BEGIN;
@@ -358,34 +358,34 @@ INSERT INTO inbox (consumer, event_id)
 VALUES ('billing', 'event-9001')
 ON CONFLICT DO NOTHING;
 
--- INSERTされた場合だけbusiness update
+-- 挿入された場合だけ業務更新
 
 COMMIT;
 ```
 
-Unique(consumer, event_id)でduplicateを無害化します。
+Unique(コンシューマー, event_id)で重複を無害化します。
 
-Retention期間を過ぎてdedup recordを消した後のlate redeliveryも考えます。
+保持期間を過ぎて重複排除レコードを消した後の遅れて到着した再配信も考えます。
 
-## delivery semantics
+## 配信の意味論
 
-### at-most-once
+### 最大1回
 
-Messageを0回または1回処理します。Lossはあり得るがduplicateを避けます。
+メッセージを0回または1回処理します。損失はあり得るが重複を避けます。
 
-### at-least-once
+### 1回以上
 
-最低1回処理します。Lossを避ける代わりにduplicateがあり得ます。
+最低1回処理します。損失を避ける代わりに重複があり得ます。
 
-### exactly-once
+### 厳密に1回
 
-範囲を明示する必要があります。Broker内部、stream processor state、特定DBへのtransactional sinkでexactly-onceを提供できても、外部email/paymentまで一度だけ副作用を保証するとは限りません。
+範囲を明示する必要があります。ブローカー内部、ストリーム処理の状態、特定DBへのトランザクション対応の出力先で厳密に1回を提供できても、外部メール/支払いまで一度だけ副作用を保証するとは限りません。
 
-実務ではat-least-once delivery + idempotent effectでeffectively-onceな業務結果を作ります。
+実務では1回以上の配信と冪等な処理を組み合わせ、実質的に1回の業務結果を作ります。
 
-## idempotency key
+## 冪等性キー
 
-同じrequestを複数回実行しても結果を一つにします。
+同じリクエストを複数回実行しても結果を一つにします。
 
 ```sql
 CREATE TABLE payment_requests (
@@ -398,117 +398,117 @@ CREATE TABLE payment_requests (
 
 処理：
 
-1. Clientがoperationごとにstable keyを送る
-2. Serverはkeyを一意にinsert
-3. 同じkey・同じrequestなら保存済みresultを返す
-4. 同じkey・異なるrequestならerror
-5. In-progressならwait/poll/retry response
+1. クライアントが操作ごとに安定したキーを送る
+2. サーバーはキーを一意に挿入
+3. 同じキー・同じリクエストなら保存済み結果を返す
+4. 同じキー・異なるリクエストならエラー
+5. 処理中なら待機/状態確認/再試行応答
 
-Keyをretryごとに作り直すとdedupできません。
+キーを再試行ごとに作り直すと重複排除できません。
 
-## ambiguous outcome
+## 結果不明
 
-Clientがtimeoutしたとき、serverは：
+クライアントがタイムアウトしたとき、サーバーは：
 
-- Request未受信
+- リクエスト未受信
 - 処理中
-- Commit済みだがresponse loss
-- Abort済み
+- コミット済みだが応答損失
+- 中止済み
 
 のどれか分かりません。
 
-「timeoutしたので反対操作をする」のは危険です。Operation status APIとidempotency keyで元operationの結果を確認します。
+「タイムアウトしたので反対操作をする」のは危険です。操作状態APIと冪等性キーで元操作の結果を確認します。
 
-## ordering
+## 順序付け
 
-Message brokerがpartition内順序を保証しても、複数producer/partitionではglobal orderがありません。
+メッセージブローカーがパーティション内順序を保証しても、複数プロデューサー/パーティションでは全体注文がありません。
 
-Aggregateごとのsequence numberを持たせます。
+集約ごとの連番を持たせます。
 
 ```text
-order-42 version 7: PaymentAuthorized
-order-42 version 8: OrderConfirmed
+注文-42バージョン7: 支払い与信済み
+注文-42バージョン8: 注文確定
 ```
 
-Consumerはversion 8を先に受けたらbuffer/retryし、duplicate version 7を無視できます。
+コンシューマーはバージョン8を先に受けたらバッファ/再試行し、重複バージョン7を無視できます。
 
-Wall clock timestampだけでorderを決めるとclock skewに弱いため、DB commit sequence、per-aggregate version、Lamport clockなどlogical orderingを使います。
+実時間時計タイムスタンプだけで注文を決めると時計ずれに弱いため、DBコミット連番、集約ごとのバージョン、Lamport時計など論理順序付けを使います。
 
-## clockと因果順序
+## 時計と因果順序
 
-Lamport clockはeventごとにcounterを進め、message受信時にmax(local, received)+1とします。
+Lamport時計はイベントごとにカウンターを進め、メッセージ受信時にmax(局所, 受信値)+1とします。
 
 ```text
-if a happened-before b:
+if a先行発生b:
   L(a) < L(b)
 ```
 
-逆は必ずしも成り立たず、concurrent eventを区別できません。Vector clockはnodeごとのcounterでcausality/concurrencyを検出できますが、metadataが増えます。
+逆は必ずしも成り立たず、並行するイベントを区別できません。ベクトル時計はノードごとのカウンターで因果関係/同時実行性を検出できますが、メタデータが増えます。
 
-Business workflowではaggregate versionやworkflow stepがより直接的な場合があります。
+業務ワークフローでは集約バージョンやワークフロー 手順がより直接的な場合があります。
 
 ## 方式を選ぶ
 
 | 要件 | 候補 |
 | --- | --- |
-| 短い複数DB更新、全participantがprepare対応、強いatomicity | 2PC |
-| 長時間business workflow、外部副作用 | Saga |
-| DB commitとevent publishを結ぶ | Transactional outbox + CDC |
-| Message duplicateを無害化 | Inbox / idempotent consumer |
-| Client timeout後の再送 | Idempotency key + status lookup |
-| Hot capacity reservation | Local transaction/escrowをownerへ集約 |
+| 短い複数DB更新、全参加者が準備対応、強い原子性 | 2PC |
+| 長時間業務ワークフロー、外部副作用 | Saga |
+| DBコミットとイベント送信を結ぶ | トランザクショナル・アウトボックス + CDC |
+| メッセージ重複を無害化 | インボックス / 冪等なコンシューマー |
+| クライアントタイムアウト後の再送 | 冪等性キー + 状態参照 |
+| 高負荷容量予約 | 局所トランザクション/エスクローを所有者へ集約 |
 
-複数patternを組み合わせます。Sagaの各stepがoutboxでeventを出し、consumerがinboxでdedupする構成が一般的です。
+複数パターンを組み合わせます。Sagaの各手順がアウトボックスでイベントを出し、コンシューマーがインボックスで重複排除する構成が一般的です。
 
 ## 運用状態
 
-分散workflowには状態をquery可能にします。
+分散ワークフローには状態をクエリ可能にします。
 
-- transaction/saga ID
-- current step/status
-- started/updated time
-- attempt count
-- last error
-- next retry time
-- participant result
-- compensation state
-- idempotency key
+- トランザクション/saga ID
+- 現在の手順/状態
+- 開始／更新時刻
+- 試行回数
+- 最後のエラー
+- 次再試行時間
+- 参加者結果
+- 補償状態
+- 冪等性キー
 
-Dead letter queueへ送って終わりではなく、再実行・skip・compensate・manual completeのrunbookを用意します。
+デッドレターキューへ送って終わりではなく、再実行・スキップ・補償実行・手動完了の運用手順書を用意します。
 
 ## よくある誤解
 
-### 「2PCならfailureがなくなる」
+### 「2PCなら障害がなくなる」
 
-Atomic decisionを守りますが、prepared lock、coordinator recovery、latency、blockingが残ります。
+原子的な決定を守りますが、準備済みロック、調整役復旧、遅延時間、処理停止が残ります。
 
-### 「Sagaはeventual consistency版のACID transaction」
+### 「Sagaは結果整合性版のACIDトランザクション」
 
-途中状態が見え、compensationは完全undoでなく、isolationをapplicationで設計します。
+途中状態が見え、補償は完全取り消しでなく、分離性をアプリケーションで設計します。
 
-### 「message brokerのexactly-onceで外部APIも一度だけ」
+### 「メッセージブローカーの厳密に1回で外部APIも一度だけ」
 
-Exactly-onceの境界外にある副作用にはidempotencyが必要です。
+厳密に1回の境界外にある副作用には冪等性が必要です。
 
 ## まとめ
 
-- 複数resourceへの順次writeはpartial failureとambiguous outcomeを生む
-- 2PCのprepare YESは、後のcommit/abort decisionへ従えるdurableな約束である
-- Coordinator unavailable中、prepared participantはin-doubtでblockし得る
-- 2PCとconsensusは異なる問題で、consensus-backed coordinatorで可用性を改善できる
-- Sagaはlocal transactionとcompensationで長いworkflowを表すが、途中状態とisolationを扱う必要がある
-- Transactional outboxはDB変更とpublish予定eventを一つのlocal transactionへ入れる
-- Relay/consumerはat-least-onceを前提にevent IDとinboxでdedupする
-- Idempotency keyはclient timeout後のretryを同一operationへ結びつける
-- Orderingにはaggregate versionやlogical clockを使う
+- 複数資源への順次書き込みは部分障害と結果不明を生む
+- 2PCの準備YESは、後のコミット/中止決定へ従える永続化された約束である
+- 調整役利用不能中、準備済み参加者は結果未確定で停止し得る
+- 2PCと合意は異なる問題で、合意で支えた調整役で可用性を改善できる
+- Sagaは局所トランザクションと補償で長いワークフローを表すが、途中状態と分離性を扱う必要がある
+- トランザクショナル・アウトボックスはDB変更と送信予定イベントを一つの局所トランザクションへ入れる
+- 中継処理/コンシューマーは1回以上を前提にイベントIDとインボックスで重複排除する
+- 冪等性キーはクライアントタイムアウト後の再試行を同一操作へ結びつける
+- 順序付けには集約バージョンや論理時計を使う
 
 ## 確認問題
 
-1. 2PC participantがYESを返す前にdurableにする必要がある情報は何ですか。
-2. Coordinator failureでprepared participantが勝手にabortできない理由を説明してください。
-3. Payment captureのcompensationが単純なrollbackではない理由は何ですか。
-4. Outbox relayがduplicate publishするfailure pointを書いてください。
-5. At-least-once messageをconsumer側でeffectively-onceにする方法を説明してください。
+1. 2PC参加者がYESを返す前に永続化する必要がある情報は何ですか。
+2. 調整役障害で準備済み参加者が勝手に中止できない理由を説明してください。
+3. 支払いの確定の補償が単純なロールバックではない理由は何ですか。
+4. アウトボックス中継処理が重複送信する障害発生箇所を書いてください。
+5. 1回以上メッセージをコンシューマー側で実質的に1回にする方法を説明してください。
 
 ## 参考資料
 
@@ -517,4 +517,4 @@ Exactly-onceの境界外にある副作用にはidempotencyが必要です。
 - [PostgreSQL Documentation: Two-Phase Transactions](https://www.postgresql.org/docs/current/two-phase.html)
 - [Debezium Documentation: Outbox Event Router](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html)
 
-次章では、ここまでのDB内部知識をapplicationのconnection、query、migration、monitoring、backup/failover運用へ接続します。
+次章では、ここまでのDB内部知識をアプリケーションの接続、クエリ、移行、監視、バックアップ/フェイルオーバー運用へ接続します。

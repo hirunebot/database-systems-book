@@ -7,18 +7,18 @@
 ## この章で答える問い
 
 - ACIDの各性質は、どの失敗からアプリケーションを守るのか
-- isolation levelを下げると、具体的にどの異常が許されるのか
-- serializabilityと実際の実行順序にはどのような関係があるのか
+- 分離レベルを下げると、具体的にどの異常が許されるのか
+- 直列化可能性と実際の実行順序にはどのような関係があるのか
 
 ## 扱う内容
 
-- atomicity、consistency、isolation、durability
-- consistencyがDB単体で保証できる範囲
-- schedule、serial schedule、serializable schedule
-- dirty read、non-repeatable read、phantom read
-- lost update、read skew、write skew
-- Read Uncommitted、Read Committed、Repeatable Read、Serializable
-- snapshot isolationとserializabilityの差
+- 原子性、整合性、分離性、永続性
+- 整合性がDB単体で保証できる範囲
+- スケジュール、直列スケジュール、直列化可能なスケジュール
+- ダーティリード、反復不能読み取り、ファントムリード
+- 更新消失、読み取りスキュー、書き込みスキュー
+- 未コミット読み取り、コミット済み読み取り、反復可能読み取り、Serializable
+- スナップショット分離と直列化可能性の差
 - SQL標準の定義と製品実装差を読む際の注意
 
 ## 図解・具体例

@@ -6,26 +6,26 @@
 
 ## この章で答える問い
 
-- replicationとconsensusは何が違うのか
-- leaderはどのように選ばれ、古いleaderの書き込みをどう防ぐのか
-- majorityがあれば、どのような障害まで進行できるのか
+- レプリケーションと合意は何が違うのか
+- リーダーはどのように選ばれ、古いリーダーの書き込みをどう防ぐのか
+- 過半数があれば、どのような障害まで進行できるのか
 
 ## 扱う内容
 
-- consensus problemとstate machine replication
-- safetyとliveness
-- majority quorumと障害許容数
-- Raftのfollower/candidate/leader
-- term、election timeout、RequestVote
-- replicated log、AppendEntries、commit index
-- log matching、leader completeness
-- leader crash、再選挙、ログ修復
-- membership changeとsnapshotの概略
-- lease、fencing token、clockへ依存する設計の注意
+- 合意問題と状態機械レプリケーション
+- 安全性と活性
+- 過半数クォーラムと障害許容数
+- Raftのフォロワー/候補/リーダー
+- 任期、選挙タイムアウト、RequestVote
+- 複製ログ、AppendEntries、コミット済み位置
+- ログ整合性、リーダー完全性
+- リーダー クラッシュ、再選挙、ログ修復
+- 構成変更とスナップショットの概略
+- リース、フェンシングトークン、時計へ依存する設計の注意
 
 ## 図解・具体例
 
-3ノードクラスタで選挙、ログ複製、leader障害、再選挙を1イベントずつ進めるタイムラインを作る。
+3ノードクラスタで選挙、ログ複製、リーダー障害、再選挙を1イベントずつ進めるタイムラインを作る。
 
 ## 演習・確認課題
 
@@ -33,4 +33,4 @@
 
 ## 読了時の到達目標
 
-Raftを単なるleader electionではなく、複製ログの順序とcommitを合意する仕組みとして説明できる。
+Raftを単なるリーダー選挙ではなく、複製ログの順序とコミットを合意する仕組みとして説明できる。

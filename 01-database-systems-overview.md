@@ -12,17 +12,17 @@
 
 ## 扱う内容
 
-- client、connection、parser、optimizer、executor、buffer pool、storageの責務
-- control planeとdata planeの大まかな区別
+- クライアント、接続、解析器、最適化器、実行器、バッファプール、ストレージの責務
+- 制御系とデータ処理系の大まかな区別
 - OLTPとOLAP、および行指向・列指向への入口
-- latency、throughput、durability、availability、consistencyの基本的なトレードオフ
+- 遅延時間、処理量、永続性、可用性、整合性の基本的なトレードオフ
 - 本書全体で追跡する注文テーブルのサンプル
 
 ## 図解・具体例
 
 - `SELECT`と`INSERT`がDB内部を通過する経路図
 - メモリ上の処理と永続ストレージ上の処理を色分けした構成図
-- 単一ノードからleader/follower構成へ拡張した際の差分図
+- 単一ノードからリーダー／フォロワー構成へ拡張した際の差分図
 
 ## 演習・確認課題
 

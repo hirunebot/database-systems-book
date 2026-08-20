@@ -1,36 +1,36 @@
 ---
-title: 05. ハッシュインデックスとLSM-tree
-description: hash indexとLSM-treeの仕組みを学び、read・write・space amplificationからB+treeと比較する。
+title: 05. ハッシュインデックスとLSM-木
+description: ハッシュインデックスとLSM-木の仕組みを学び、読み取り・書き込み・容量増幅からB+木と比較する。
 sidebar:
   order: 5
-  label: 05. ハッシュインデックスとLSM-tree
+  label: 05. ハッシュインデックスとLSM-木
 ---
 
-B+treeは等価検索と範囲検索の両方を扱える汎用的な構造ですが、すべてのworkloadで最適とは限りません。等価検索だけならhash indexが単純で高速になり得ます。大量の書き込みでは、LSM-treeがrandom writeを順次writeへ変換できます。
+B+木は等価検索と範囲検索の両方を扱える汎用的な構造ですが、すべての処理負荷で最適とは限りません。等価検索だけならハッシュインデックスが単純で高速になり得ます。大量の書き込みでは、LSM-木がランダム書き込みを順次書き込みへ変換できます。
 
-この章では、data structureの名前ではなく、どのI/Oを減らし、代わりに何を増やすのかを比較します。
+この章では、データ構造の名前ではなく、どのI/Oを減らし、代わりに何を増やすのかを比較します。
 
 ## この章で答える問い
 
-- Hash indexはなぜ等価検索へ向き、範囲検索へ向かないのか
-- Bucketが偏ったり増えたりしたとき、hash indexはどう拡張するのか
-- LSM-treeはrandom writeをどのようにsequential writeへ変換するのか
-- Compactionは何を解決し、どのresourceを消費するのか
-- Read、write、space amplificationとは何か
+- ハッシュインデックスはなぜ等価検索へ向き、範囲検索へ向かないのか
+- バケットが偏ったり増えたりしたとき、ハッシュインデックスはどう拡張するのか
+- LSM-木はランダム書き込みをどのように順次書き込みへ変換するのか
+- コンパクションは何を解決し、どの資源を消費するのか
+- 読み取り、書き込み、容量増幅とは何か
 
-## hash index
+## ハッシュインデックス
 
-Hash indexはkeyへhash functionを適用し、得られたhash値からbucketを選びます。
+ハッシュインデックスはキーへハッシュ関数を適用し、得られたハッシュ値からバケットを選びます。
 
 ```mermaid
 flowchart LR
-    K["key = customer-42"] --> H["hash(key)"]
-    H --> B["bucket 7"]
-    B --> E1["customer-42 → row pointer"]
-    B --> E2["collision entry"]
+    K["キー = 顧客-42"] --> H["ハッシュ(キー)"]
+    H --> B["バケット7"]
+    B --> E1["顧客-42 → 行ポインター"]
+    B --> E2["衝突項目"]
 ```
 
-理想的にkeyがbucketへ均等分散し、bucketがmemoryまたは少数pageに収まれば、等価検索は少ないaccessで済みます。
+理想的にキーがバケットへ均等分散し、バケットがメモリまたは少数ページに収まれば、等価検索は少ないアクセスで済みます。
 
 ```sql
 SELECT *
@@ -38,7 +38,7 @@ FROM sessions
 WHERE session_id = 'a8f3...';
 ```
 
-一方、hash値はkeyの大小関係を保存しません。customer-10とcustomer-11が近いbucketに入る保証はないため、次のrange queryには基本的に向きません。
+一方、ハッシュ値はキーの大小関係を保存しません。顧客-10と顧客-11が近いバケットに入る保証はないため、次の範囲クエリには基本的に向きません。
 
 ```sql
 SELECT *
@@ -47,283 +47,283 @@ WHERE ordered_at >= TIMESTAMPTZ '2026-08-01'
   AND ordered_at <  TIMESTAMPTZ '2026-09-01';
 ```
 
-## collision
+## 衝突
 
-異なるkeyが同じbucketへ対応することをcollisionと呼びます。Hash spaceが有限である以上、collision自体は異常ではありません。解決方法が必要です。
+異なるキーが同じバケットへ対応することを衝突と呼びます。ハッシュ領域が有限である以上、衝突自体は異常ではありません。解決方法が必要です。
 
-### chaining
+### チェイン法
 
-Bucketからentry listやoverflow pageをたどります。実装が単純ですが、偏りや高いload factorでchainが長くなるとlookup costが増えます。
+バケットから項目リストやオーバーフロー ページをたどります。実装が単純ですが、偏りや高い負荷係数で連鎖が長くなると参照コストが増えます。
 
-### open addressing
+### オープンアドレス法
 
-Bucket array内の別slotをprobeします。Linear probing、quadratic probing、double hashingなどがあります。Memory上ではcache localityを得やすい一方、load factorが高いとprobe数が増えます。
+バケット配列内の別スロットを探索します。線形探索法、二次探索法、二重ハッシュ法などがあります。メモリ上ではキャッシュ局所性を得やすい一方、負荷係数が高いと探索数が増えます。
 
-Disk-based hash indexではpage単位のbucketとoverflow pageを使う設計が一般的です。
+ディスク方式ハッシュインデックスではページ単位のバケットとオーバーフロー ページを使う設計が一般的です。
 
-## hash tableの拡張
+## ハッシュ表の拡張
 
-固定bucket数のstatic hashingでは、data増加時にoverflowが増えます。全entryを倍のbucketへrehashすると大きな停止やI/Oが必要です。
+固定バケット数の静的ハッシュ法では、データ増加時にオーバーフローが増えます。全項目を倍のバケットへ再ハッシュすると大きな停止やI/Oが必要です。
 
-### extendible hashing
+### 拡張可能ハッシュ法
 
-Hash bitのprefixを使うdirectoryを持ち、overflowしたbucketだけをsplitします。Directoryは必要に応じて倍増します。
+ハッシュビットの接頭辞を使うディレクトリを持ち、オーバーフローしたバケットだけを分割します。ディレクトリは必要に応じて倍増します。
 
 ```mermaid
 flowchart TB
-    Dir["Directory<br/>00 → B0<br/>01 → B1<br/>10 → B2<br/>11 → B3"]
-    Dir --> B0["Bucket 00"]
-    Dir --> B1["Bucket 01"]
-    Dir --> B2["Bucket 10"]
-    Dir --> B3["Bucket 11"]
+    Dir["ディレクトリ<br/>00 → B0<br/>01 → B1<br/>10 → B2<br/>11 → B3"]
+    Dir --> B0["バケット00"]
+    Dir --> B1["バケット01"]
+    Dir --> B2["バケット10"]
+    Dir --> B3["バケット11"]
 ```
 
-### linear hashing
+### 線形ハッシュ法
 
-Directoryを必須とせず、bucketを一定順序で段階的にsplitします。大規模な一括rehashを避け、成長を平準化します。
+ディレクトリを必須とせず、バケットを一定順序で段階的に分割します。大規模な一括再ハッシュを避け、成長を平準化します。
 
-どちらも「table全体を一度に作り直さず、少数bucketずつ増やす」ことが中心です。
+どちらも「表全体を一度に作り直さず、少数バケットずつ増やす」ことが中心です。
 
-## hash indexの使いどころ
+## ハッシュインデックスの使いどころ
 
 向いている例：
 
-- session IDやcache keyのpoint lookup
-- in-memory hash joinのbuild table
-- key-value storeのmemory index
-- equality conditionだけを扱うindex
+- セッションIDやキャッシュキーの単一キー検索
+- in-メモリハッシュ結合の構築表
+- キー-値保存のメモリインデックス
+- 等値条件だけを扱うインデックス
 
 向いていない例：
 
-- range scan
-- ORDER BYをindex順で満たす
-- prefix search
-- min/maxや隣接keyの探索
+- 範囲走査
+- ORDER BYをインデックス順で満たす
+- 接頭辞検索
+- min/maxや隣接キーの探索
 
-RDBのdisk indexではB+treeが十分高速かつ汎用的なので、hash indexの採用範囲は製品によって異なります。PostgreSQLのhash indexは等価operator用であり、multi-columnやuniquenessなどB-treeと異なる制約があります。
+RDBのディスクインデックスではB+木が十分高速かつ汎用的なので、ハッシュインデックスの採用範囲は製品によって異なります。PostgreSQLのハッシュインデックスは等価演算子用であり、複数列や一意性などB-木と異なる制約があります。
 
-## append-only logからLSM-treeへ
+## 追記専用ログからLSM-木へ
 
-Writeを速く受け付ける単純な方法は、file末尾へ追記することです。Sequential appendは効率的ですが、最新keyを探すためにlog全体を読むわけにはいきません。
+書き込みを速く受け付ける単純な方法は、ファイル末尾へ追記することです。順次追記は効率的ですが、最新キーを探すためにログ全体を読むわけにはいきません。
 
-Memory上にkeyから最新offsetへのhash mapを置けばpoint lookupできます。しかしmemoryへ全key indexが収まらない場合やrange scanをしたい場合、別の構造が必要です。
+メモリ上にキーから最新オフセットへのハッシュマップを置けば単一キー検索できます。しかしメモリへ全キー インデックスが収まらない場合や範囲走査をしたい場合、別の構造が必要です。
 
-LSM-tree（Log-Structured Merge-tree）は、更新をまずmemory上のsorted structureへ入れ、まとまったsorted fileとしてstorageへ書き出します。
+LSM-木（ログ構造化マージ木）は、更新をまずメモリ上の整列済み構造へ入れ、まとまった整列済みファイルとしてストレージへ書き出します。
 
-## LSM-treeのwrite path
+## LSM-木の書き込み経路
 
 代表的な構成を単純化すると次のようになります。
 
 ```mermaid
 flowchart TB
-    W["Write"]
+    W["書き込み"]
     WAL["WAL"]
-    Mem["Mutable Memtable"]
-    Imm["Immutable Memtable"]
-    L0["Level 0 SSTables"]
-    L1["Level 1 SSTables"]
-    L2["Level 2 SSTables"]
+    Mem["書き込み可能なMemtable"]
+    Imm["変更不能Memtable"]
+    L0["レベル0 SSTable群"]
+    L1["レベル1 SSTable群"]
+    L2["レベル2 SSTable群"]
 
     W --> WAL
     W --> Mem
-    Mem -->|"full / rotate"| Imm
-    Imm -->|"flush"| L0
-    L0 -->|"compaction"| L1
-    L1 -->|"compaction"| L2
+    Mem -->|"満杯／切り替え"| Imm
+    Imm -->|"書き出し"| L0
+    L0 -->|"コンパクション"| L1
+    L1 -->|"コンパクション"| L2
 ```
 
-1. DurabilityのためwriteをWALへ追記する
-2. Memory上のsorted memtableへkey/valueを追加する
-3. Memtableが一定sizeになるとimmutableへ切り替える
-4. Immutable memtableをsorted SSTableとして順次writeする
-5. Background compactionでSSTableをmergeし、level間を移動する
+1. 永続性のため書き込みをWALへ追記する
+2. メモリ上の整列済みMemtableへキー/値を追加する
+3. Memtableが一定大きさになると不変へ切り替える
+4. 変更不能Memtableを整列済みSSTableとして順次書き出す
+5. バックグラウンドコンパクションでSSTableをマージし、レベル間を移動する
 
-SSTableはSorted String Tableの略で、key順に並んだimmutable fileです。一度作成したSSTableをin-place updateせず、新しいversionを別fileへ書きます。
+SSTableは整列済み文字列表の略で、キー順に並んだ不変ファイルです。一度作成したSSTableをその場では更新せず、新しいバージョンを別ファイルへ書きます。
 
-## read path
+## 読み取り経路
 
-一つのkeyがmemtable、immutable memtable、複数levelのSSTableのどこにあるか分からないため、readは新しい構造から順に探します。
+一つのキーがMemtable、変更不能Memtable、複数レベルのSSTableのどこにあるか分からないため、読み取りは新しい構造から順に探します。
 
 ```mermaid
 flowchart LR
-    Q["Get key"] --> M["Memtable"]
-    M --> I["Immutable memtables"]
-    I --> Z["L0 files"]
-    Z --> O["L1...Ln files"]
-    O --> R["Newest visible value"]
+    Q["キーを取得"] --> M["Memtable"]
+    M --> I["変更不能Memtable群"]
+    I --> Z["L0ファイル"]
+    Z --> O["L1...Lnファイル"]
+    O --> R["最新の可視値"]
 ```
 
 各SSTableには次の補助構造を持たせます。
 
-- block index：目的keyがあり得るblockを絞る
-- Bloom filter：そのfileにkeyが確実に存在しない場合を判定する
-- min/max key metadata：rangeが重ならないfileを除外する
-- block cache：頻繁に読むdata/index blockをmemoryへ置く
+- 停止インデックス：目的キーがあり得る停止を絞る
+- Bloomフィルター：そのファイルにキーが確実に存在しない場合を判定する
+- min/maxキー メタデータ：範囲が重ならないファイルを除外する
+- 停止キャッシュ：頻繁に読むデータ/インデックス停止をメモリへ置く
 
-## Bloom filter
+## Bloomフィルター
 
-Bloom filterは、ある集合にkeyが含まれるかをbit arrayと複数hash functionで判定する確率的data structureです。
+Bloomフィルターは、ある集合にキーが含まれるかをビット配列と複数ハッシュ関数で判定する確率的データ構造です。
 
 - 「存在しない」と判定した場合、本当に存在しない
-- 「存在するかもしれない」と判定した場合、false positiveの可能性がある
-- false negativeはない
+- 「存在するかもしれない」と判定した場合、偽陽性の可能性がある
+- 偽陰性はない
 
 ```mermaid
 flowchart LR
-    K["key"] --> H1["h1"]
+    K["キー"] --> H1["h1"]
     K --> H2["h2"]
     K --> H3["h3"]
-    H1 --> Bits["bit array"]
+    H1 --> Bits["ビット配列"]
     H2 --> Bits
     H3 --> Bits
 ```
 
-LSM-treeでは、存在しないkeyを探すたびに全SSTableを読むcostを減らします。Bloom filterが「ない」と答えたfileはstorage accessなしでskipできます。
+LSM-木では、存在しないキーを探すたびに全SSTableを読むコストを減らします。Bloomフィルターが「ない」と答えたファイルはストレージアクセスなしでスキップできます。
 
-False positive率を下げるにはkeyあたりbit数やhash数を増やしますが、memory costも増えます。
+偽陽性率を下げるにはキーあたりビット数やハッシュ数を増やしますが、メモリコストも増えます。
 
-## compaction
+## コンパクション
 
-新しいSSTableを追加し続けるだけでは、同じkeyの古いversion、delete tombstone、小さなfileが増えます。Compactionは複数のsorted runをmergeし、不要versionを除去し、file配置を整えます。
+新しいSSTableを追加し続けるだけでは、同じキーの古いバージョン、削除マーカー、小さなファイルが増えます。コンパクションは複数の整列済みランをマージし、不要バージョンを除去し、ファイル配置を整えます。
 
 ```mermaid
 flowchart LR
     A["SSTable A<br/>a1, c1, e1"]
     B["SSTable B<br/>b2, c2, d2"]
-    C["Merged<br/>a1, b2, c2, d2, e1"]
+    C["マージ結果<br/>a1, b2, c2, d2, e1"]
     A --> C
     B --> C
 ```
 
-同じkey cでは新しいversion c2を残し、snapshotやretention条件上不要ならc1を除去できます。
+同じキー cでは新しいバージョンc2を残し、スナップショットや保持期間条件上不要ならc1を除去できます。
 
-Compactionはreadを改善しますが、background I/OとCPUを消費します。Write trafficがcompaction能力を超えると、L0 fileが増えてread amplificationが悪化し、最終的にwrite stallで流入を抑えることがあります。
+コンパクションは読み取りを改善しますが、バックグラウンドI/OとCPUを消費します。書き込み通信量がコンパクション能力を超えると、L0ファイルが増えて読み取り増幅が悪化し、最終的に書き込み停止で流入を抑えることがあります。
 
-## leveledとtiered compaction
+## レベル方式と階層方式のコンパクション
 
-### leveled compaction
+### レベル方式のコンパクション
 
-各levelのsize上限を定め、下位levelへ小さな範囲ずつmergeします。同一level内のkey rangeを重複させない設計では、read時に調べるfile数を抑えられます。
+各レベルの大きさ上限を定め、下位レベルへ小さな範囲ずつマージします。同一レベル内のキー 範囲を重複させない設計では、読み取り時に調べるファイル数を抑えられます。
 
-- read amplificationを抑えやすい
-- space amplificationを抑えやすい
-- 同じdataを複数回書き直し、write amplificationが増えやすい
+- 読み取り増幅を抑えやすい
+- 容量増幅を抑えやすい
+- 同じデータを複数回書き直し、書き込み増幅が増えやすい
 
-### tiered / size-tiered compaction
+### 階層方式 / 大きさ-階層方式のコンパクション
 
-同程度sizeのSSTableを複数蓄積してからmergeします。
+同程度大きさのSSTableを複数蓄積してからマージします。
 
-- write amplificationを抑えやすい
-- 同じkey rangeを持つrunが増え、read amplificationが高くなりやすい
-- 古いversionが複数runへ残り、spaceを使いやすい
+- 書き込み増幅を抑えやすい
+- 同じキー 範囲を持つ実行が増え、読み取り増幅が高くなりやすい
+- 古いバージョンが複数ランへ残り、領域を使いやすい
 
-実際のengineはleveled、tiered、universal、time-windowなどをworkloadに合わせて組み合わせます。
+実際のエンジンはレベル方式、階層方式、ユニバーサル方式、時間窓方式などを処理負荷に合わせて組み合わせます。
 
-## tombstone
+## 削除マーカー
 
-Immutable SSTableのentryをその場で消せないため、deleteもtombstoneという新しいrecordとして書きます。
-
-```text
-older SSTable:  order:42 → confirmed
-newer SSTable:  order:42 → TOMBSTONE
-```
-
-Readは新しいtombstoneを見たら「削除済み」と判断します。Compaction時に古いvalueとtombstoneを安全に除去できますが、replica、snapshot、下位levelに古いvalueが残っていないことを考慮する必要があります。
-
-Tombstoneが大量に残るとreadとspaceを圧迫します。TTL workloadではcompaction strategyが特に重要です。
-
-## amplificationで比較する
-
-### write amplification
-
-Applicationが書いたlogical byteに対し、storageへ実際に何byte書いたかの比率です。
+不変SSTableの項目をその場で消せないため、削除も削除マーカーという新しいレコードとして書きます。
 
 ```text
-write amplification =
-  bytes written to storage / logical bytes written by application
+古いSSTable:  注文:42 → 確定済み
+新しいSSTable: 注文:42 → 削除マーカー
 ```
 
-WAL、B+tree page split、LSM compaction、replicationなどが増加要因です。
+読み取りは新しい削除マーカーを見たら「削除済み」と判断します。コンパクション時に古い値と削除マーカーを安全に除去できますが、レプリカ、スナップショット、下位レベルに古い値が残っていないことを考慮する必要があります。
 
-### read amplification
+削除マーカーが大量に残ると読み取りと領域を圧迫します。TTL処理負荷ではコンパクション方針が特に重要です。
 
-一つのlogical readを満たすために読むpage、block、file、byteの余分さです。
+## 増幅で比較する
 
-- B+treeのinternal/leaf/table lookup
+### 書き込み増幅
+
+アプリケーションが書いた論理バイトに対し、ストレージへ実際に何バイト書いたかの比率です。
+
+```text
+書き込み増幅 =
+  ストレージへ書いたバイト数／アプリケーションが書いた論理バイト数
+```
+
+WAL、B+木ページ分割、LSMコンパクション、レプリケーションなどが増加要因です。
+
+### 読み取り増幅
+
+一つの論理読み取りを満たすために読むページ、停止、ファイル、バイトの余分さです。
+
+- B+木の内部/葉/表の参照
 - LSMの複数SSTable探索
-- tombstoneやold versionのscan
+- 削除マーカーや古いバージョンの走査
 
-### space amplification
+### 容量増幅
 
-現在有効なlogical dataに対し、storageを何倍使っているかです。
+現在有効な論理データに対し、ストレージを何倍使っているかです。
 
-- B+treeのfree spaceとold version
-- LSMの複数versionとtombstone
-- compaction中のinput/output共存
+- B+木の空き領域と古いバージョン
+- LSMの複数バージョンと削除マーカー
+- コンパクション中の入力/出力共存
 
-一つのamplificationを下げると別のamplificationが上がりやすくなります。
+一つの増幅を下げると別の増幅が上がりやすくなります。
 
-## B+tree、hash、LSM-treeの比較
+## B+木、ハッシュ、LSM-木の比較
 
-| 観点 | B+tree | Hash index | LSM-tree |
+| 観点 | B+木 | ハッシュインデックス | LSM-木 |
 | --- | --- | --- | --- |
-| point lookup | 得意 | 非常に得意 | Bloom/filter/cache次第 |
-| range scan | 得意 | 不向き | sorted SSTableで可能 |
-| write | in-place page更新とsplit | bucket更新 | memory + sequential flush |
-| background work | vacuum/rebalance等 | resize/split | compaction |
-| read amplification | tree + table access | bucket/overflow | memtable + 複数run |
-| write amplification | WAL + page/index更新 | WAL + bucket更新 | WAL + compaction |
-| 代表的用途 | 汎用RDB index | equality lookup | write-heavy KV/DB engine |
+| 単一キー検索 | 得意 | 非常に得意 | Bloom/絞り込み/キャッシュ次第 |
+| 範囲走査 | 得意 | 不向き | 整列済みSSTableで可能 |
+| 書き込み | ページのその場更新と分割 | バケット更新 | メモリ + 順次書き出し |
+| バックグラウンド処理 | 不要版の回収/再均衡化等 | 拡張/分割 | コンパクション |
+| 読み取り増幅 | 木 + 表アクセス | バケット/オーバーフロー | Memtable + 複数ラン |
+| 書き込み増幅 | WAL + ページ/インデックス更新 | WAL + バケット更新 | WAL + コンパクション |
+| 代表的用途 | 汎用RDBインデックス | 等値参照 | 書き込み中心のKV/DBエンジン |
 
-同じ「LSM-tree採用」でも、memtable、level size、compaction、cache、filterによって特性は大きく変わります。名前だけで性能を判断しません。
+同じ「LSM-木採用」でも、Memtable、レベル大きさ、コンパクション、キャッシュ、絞り込みによって特性は大きく変わります。名前だけで性能を判断しません。
 
-## workloadから選ぶ
+## 処理負荷から選ぶ
 
-### Write-heavy event ingestion
+### 書き込み中心のイベント取り込み
 
-大量の追記、時間範囲read、TTL削除がある場合、LSM-treeとtime-based compactionが候補になります。ただしcompaction帯域とtombstone管理が必要です。
+大量の追記、時間範囲読み取り、TTL削除がある場合、LSM-木と時間基準コンパクションが候補になります。ただしコンパクション帯域と削除マーカー管理が必要です。
 
-### Session lookup
+### セッション参照
 
-Session IDによるpoint lookupだけでrange scanが不要なら、hash-based structureが適合しやすいです。Durabilityとresize方法も確認します。
+セッションIDによる単一キー検索だけで範囲走査が不要なら、ハッシュ方式構造が適合しやすいです。永続性と拡張方法も確認します。
 
-### Order management
+### 注文管理
 
-Primary key lookup、顧客別の時系列、statusによるfilter、transactional updateを行うならB+treeを持つRDBが扱いやすい場合があります。
+主キー 参照、顧客別の時系列、状態による絞り込み、トランザクション更新を行うならB+木を持つRDBが扱いやすい場合があります。
 
-選択はdata structure単体ではなく、transaction、replication、operabilityを含むDB全体で行います。
+選択はデータ構造単体ではなく、トランザクション、レプリケーション、運用性を含むDB全体で行います。
 
 ## よくある誤解
 
-### 「LSM-treeは書き込みが1回なのでwrite amplificationがない」
+### 「LSM-木は書き込みが1回なので書き込み増幅がない」
 
-WAL、flush、複数levelのcompactionで同じdataを何度も書くことがあります。Front-end latencyを下げても、background writeは消えません。
+WAL、書き出し、複数レベルのコンパクションで同じデータを何度も書くことがあります。利用者向けの遅延時間を下げても、バックグラウンド書き込みは消えません。
 
-### 「Bloom filterがあればkeyの存在が分かる」
+### 「Bloomフィルターがあればキーの存在が分かる」
 
-Bloom filterのpositiveは「存在するかもしれない」です。実dataを読む必要があります。
+Bloomフィルターの陽性は「存在するかもしれない」です。実データを読む必要があります。
 
-### 「Hash lookupは常にO(1)だからB+treeより速い」
+### 「ハッシュ参照は常にO(1)だからB+木より速い」
 
-Collision、overflow、resize、cache miss、durability、range要件を含める必要があります。Big-Oの平均計算量だけではI/O costを説明できません。
+衝突、オーバーフロー、拡張、キャッシュミス、永続性、範囲要件を含める必要があります。O記法の平均計算量だけではI/Oコストを説明できません。
 
 ## まとめ
 
-- Hash indexはhash値でbucketを選び、equality lookupへ向く
-- Collisionはchainingやprobingで解決し、dynamic hashingで段階的に成長させる
-- LSM-treeはwriteをmemtableへ受け、sorted SSTableとしてsequentialにflushする
-- Readでは複数構造を探すため、index、cache、Bloom filterでI/Oを減らす
-- Compactionはversion、tombstone、file数を整理するが、CPUとI/Oを消費する
-- Leveledとtiered compactionはread、write、space amplificationの配分が異なる
-- Data structureはworkloadと運用要件を含めて選ぶ
+- ハッシュインデックスはハッシュ値でバケットを選び、等値参照へ向く
+- 衝突はチェイン法や探索法で解決し、動的ハッシュ法で段階的に成長させる
+- LSM-木は書き込みをMemtableへ受け、整列済みSSTableとして順次書き出す
+- 読み取りでは複数構造を探すため、インデックス、キャッシュ、BloomフィルターでI/Oを減らす
+- コンパクションはバージョン、削除マーカー、ファイル数を整理するが、CPUとI/Oを消費する
+- レベル方式と階層方式のコンパクションは読み取り、書き込み、容量増幅の配分が異なる
+- データ構造は処理負荷と運用要件を含めて選ぶ
 
 ## 確認問題
 
-1. Hash indexがordered_atのrange queryに向かない理由を説明してください。
-2. Extendible hashingが一括rehashを避ける仕組みを説明してください。
-3. LSM-treeのwriteが高速でも、background I/Oが増える理由は何ですか。
-4. Bloom filterのfalse positiveとfalse negativeの違いを説明してください。
-5. Leveledとtiered compactionを3種類のamplificationから比較してください。
+1. ハッシュインデックスがordered_atの範囲クエリに向かない理由を説明してください。
+2. 拡張可能ハッシュ法が一括再ハッシュを避ける仕組みを説明してください。
+3. LSM-木の書き込みが高速でも、バックグラウンドI/Oが増える理由は何ですか。
+4. Bloomフィルターの偽陽性と偽陰性の違いを説明してください。
+5. レベル方式と階層方式のコンパクションを3種類の増幅から比較してください。
 
 ## 参考資料
 
@@ -332,4 +332,4 @@ Collision、overflow、resize、cache miss、durability、range要件を含め�
 - [RocksDB Wiki: Compaction](https://github.com/facebook/rocksdb/wiki/Compaction)
 - [RocksDB Wiki: Bloom Filter](https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter)
 
-次章からはquery processingへ進みます。SQLがrelation algebraとlogical planへ変換される過程を追跡します。
+次章からはクエリ処理へ進みます。SQLが関係代数と論理計画へ変換される過程を追跡します。

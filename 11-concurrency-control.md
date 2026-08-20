@@ -2,35 +2,35 @@
 
 ## この章の役割
 
-分離性を実現する代表的な仕組みを比較し、競合時の待機、abort、version管理が性能へ与える影響を理解する。
+分離性を実現する代表的な仕組みを比較し、競合時の待機、中止、バージョン管理が性能へ与える影響を理解する。
 
 ## この章で答える問い
 
-- lockとMVCCは競合をどのように扱うのか
-- optimistic/pessimistic concurrency controlは何に対して楽観・悲観なのか
-- deadlockはなぜ起き、DBはどう検出・解消するのか
+- ロックとMVCCは競合をどのように扱うのか
+- 楽観的/悲観的並行性制御は何に対して楽観・悲観なのか
+- デッドロックはなぜ起き、DBはどう検出・解消するのか
 
 ## 扱う内容
 
-- shared/exclusive lock、lock compatibility
-- row/page/table lock、intention lock、lock escalation
-- two-phase locking（2PL）とstrict 2PL
-- predicate lockとphantom対策
-- MVCCのversion、snapshot、visibility rule
-- vacuum/garbage collectionとlong-running transaction
-- optimistic concurrency control、validation、retry
-- pessimistic concurrency controlと待機
-- wait-for graph、deadlock detection、victim selection
-- timestamp orderingとSerializable Snapshot Isolation（SSI）の概略
+- 共有/排他ロック、ロック互換性
+- 行/ページ/表ロック、意図ロック、ロック昇格
+- 二相ロック（2PL）と厳格二相ロック
+- 述語ロックとファントム対策
+- MVCCのバージョン、スナップショット、可視性規則
+- 不要版の回収/ガベージコレクションと長時間トランザクション
+- 楽観的並行性制御、検証、再試行
+- 悲観的並行性制御と待機
+- 待機グラフ、デッドロック検出、犠牲トランザクションの選択
+- タイムスタンプ順序制御と直列化可能スナップショット分離（SSI）の概略
 
 ## 図解・具体例
 
-同じ在庫更新をlock方式とMVCC方式で並行実行し、reader/writerの待機とversionの見え方を比較する。
+同じ在庫更新をロック方式とMVCC方式で並行実行し、読み取り側/書き込み側の待機とバージョンの見え方を比較する。
 
 ## 演習・確認課題
 
-deadlockを起こす2トランザクションを設計し、ロック取得順序の統一で回避する。
+デッドロックを起こす2トランザクションを設計し、ロック取得順序の統一で回避する。
 
 ## 読了時の到達目標
 
-競合の種類と頻度から並行性制御の挙動を予測し、待機とretryのどちらが起きるか説明できる。
+競合の種類と頻度から並行性制御の挙動を予測し、待機と再試行のどちらが起きるか説明できる。

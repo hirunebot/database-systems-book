@@ -7,27 +7,27 @@
 ## この章で答える問い
 
 - SQLは「何を得たいか」しか書かないのに、DBはどう実行方法を決めるのか
-- relational algebraはSQLの理解にどう役立つのか
-- logical planの書き換えは、なぜ結果を変えずに高速化できるのか
+- 関係代数はSQLの理解にどう役立つのか
+- 論理計画の書き換えは、なぜ結果を変えずに高速化できるのか
 
 ## 扱う内容
 
-- parsing、binding/name resolution、type checking
-- selection、projection、join、aggregation、set operation
-- SQLのbag semanticsと関係代数のset semanticsの差
-- NULLとthree-valued logicが書き換えへ与える影響
-- query treeとlogical plan
-- predicate pushdown、projection pruning、constant folding
-- subqueryのdecorrelationとview展開への入口
+- 構文解析、名前解決/名前解決、型検査
+- 選択、射影、結合、集約、集合操作
+- SQLのバッグ意味論と関係代数の集合意味論の差
+- NULLと3値論理が書き換えへ与える影響
+- クエリ木と論理計画
+- 述語のプッシュダウン、射影の刈り込み、定数畳み込み
+- サブクエリの非相関化とビュー展開への入口
 
 ## 図解・具体例
 
-顧客別の注文合計を求めるSQLを、構文木、関係代数、書き換え前後のlogical planへ順に変換する。
+顧客別の注文合計を求めるSQLを、構文木、関係代数、書き換え前後の論理計画へ順に変換する。
 
 ## 演習・確認課題
 
-SQLを関係代数へ変換し、selectionとprojectionを安全に下へ移動できる位置を示す。
+SQLを関係代数へ変換し、選択と射影を安全に下へ移動できる位置を示す。
 
 ## 読了時の到達目標
 
-SQLの記述順と実行順が一致しない理由を説明し、logical planを読める。
+SQLの記述順と実行順が一致しない理由を説明し、論理計画を読める。

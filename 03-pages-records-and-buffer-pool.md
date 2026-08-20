@@ -2,29 +2,29 @@
 
 ## この章の役割
 
-テーブルがファイルへ保存される過程を、byte列ではなくページ単位で理解する。ディスクI/Oとメモリ管理が後続のインデックス、実行計画、WALへどう影響するかを示す。
+テーブルがファイルへ保存される過程を、バイト列ではなくページ単位で理解する。ディスクI/Oとメモリ管理が後続のインデックス、実行計画、WALへどう影響するかを示す。
 
 ## この章で答える問い
 
-- なぜDBは行単位ではなくpage/block単位で読み書きするのか
+- なぜDBは行単位ではなくページ／ブロック単位で読み書きするのか
 - 可変長レコードをページ内でどう管理するのか
-- buffer poolはOS page cacheと何が違うのか
+- バッファプールはOSのページキャッシュと何が違うのか
 
 ## 扱う内容
 
-- storage hierarchy、sector、page/block、extentの関係
-- heap file、slotted page、record ID、free space management
-- row-oriented storageとcolumn-oriented storage
-- buffer frame、pin/unpin、dirty page、replacement policy
-- sequential I/Oとrandom I/O、read-ahead
-- OS page cache、Direct I/O、fsyncとの境界
-- page checksum、compression、table bloatへの入口
+- 記憶階層、セクター、ページ／ブロック、エクステントの関係
+- ヒープファイル、スロットページ、レコードID、空き領域管理
+- 行指向ストレージと列指向ストレージ
+- バッファフレーム、固定/固定解除、未書き出しページ、置換方針
+- 順次I/OとランダムI/O、先読み
+- OSのページキャッシュ、直接I/O、fsyncとの境界
+- ページチェックサム、圧縮、表の肥大化への入口
 
 ## 図解・具体例
 
-- slotted pageのheader、slot array、record領域
-- cache miss時にページがストレージからbuffer poolへ入る流れ
-- 行更新後、dirty pageがまだ永続化されていない状態
+- スロットページのヘッダー、スロット配列、レコード領域
+- キャッシュミス時にページがストレージからバッファプールへ入る流れ
+- 行更新後、未書き出しページがまだ永続化されていない状態
 
 ## 演習・確認課題
 

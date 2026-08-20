@@ -6,31 +6,31 @@
 
 ## この章で答える問い
 
-- dirty pageより先にログを永続化する必要があるのはなぜか
-- checkpointを取ってもWALを不要にできないのはなぜか
-- redoとundoは、どの更新に対して必要になるのか
+- 未書き出しページより先にログを永続化する必要があるのはなぜか
+- チェックポイントを取ってもWALを不要にできないのはなぜか
+- 再実行と取り消しは、どの更新に対して必要になるのか
 
 ## 扱う内容
 
-- write-ahead loggingの原則
-- log record、transaction ID、log sequence number（LSN）
-- commit recordとgroup commit
-- force/no-force、steal/no-stealの組み合わせ
-- sharp/fuzzy checkpoint
-- crash recoveryのanalysis、redo、undo
-- ARIESの基本アイデアとcompensation log record
-- media failureとcrash failureの違い
-- backup/restore、base backup、point-in-time recovery（PITR）
-- checksumと破損検出
+- 先行書き込みログの原則
+- ログレコード、トランザクションID、ログシーケンス番号（LSN）
+- コミットレコードとグループコミット
+- フォース/フォースなし、スティール/スティールなしの組み合わせ
+- 静止型／ファジーチェックポイント
+- クラッシュ復旧の分析、再実行、取り消し
+- ARIESの基本アイデアと補償ログレコード
+- 媒体障害とクラッシュ障害の違い
+- バックアップ／復元、ベースバックアップ、時点復旧（PITR）
+- チェックサムと破損検出
 
 ## 図解・具体例
 
-commit済み・未commitの更新とdirty pageが混在した瞬間にクラッシュさせ、ログから復旧する過程を示す。
+コミット済み・未コミットの更新と未書き出しページが混在した瞬間にクラッシュさせ、ログから復旧する過程を示す。
 
 ## 演習・確認課題
 
-ログ列とページLSNを読み、redo対象、undo対象、処理不要の更新へ分類する。
+ログ列とページLSNを読み、再実行対象、取り消し対象、処理不要の更新へ分類する。
 
 ## 読了時の到達目標
 
-commit応答、ログ永続化、データページ書き出しの順序と、クラッシュ後の復旧手順を説明できる。
+コミット応答、ログ永続化、データページ書き出しの順序と、クラッシュ後の復旧手順を説明できる。

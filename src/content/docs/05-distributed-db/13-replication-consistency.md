@@ -1,276 +1,276 @@
 ---
 title: 13. レプリケーションと整合性
-description: leader/follower、同期・非同期複製、quorum、consistency model、CAP/PACELCを理解する。
+description: リーダー／フォロワー、同期・非同期複製、クォーラム、整合性モデル、CAP/PACELCを理解する。
 sidebar:
   order: 13
   label: 13. レプリケーションと整合性
 ---
 
-Replicationは同じlogical dataのcopyを複数nodeへ持つ仕組みです。Availability、durability、read throughputを改善できますが、copy間の遅延と不一致を新たに生みます。
+レプリケーションは同じ論理データの複製を複数ノードへ持つ仕組みです。可用性、永続性、読み取り処理量を改善できますが、複製間の遅延と不一致を新たに生みます。
 
-「replicaが3台ある」という構成情報だけでは保証は分かりません。Writeを何台が確認したらcommitとするか、readをどこへ送るか、network partition時にどちら側を正とするかを定義する必要があります。
+「レプリカが3台ある」という構成情報だけでは保証は分かりません。書き込みを何台が確認したらコミットとするか、読み取りをどこへ送るか、ネットワーク分断時にどちら側を正とするかを定義する必要があります。
 
 ## この章で答える問い
 
-- Replicationはavailability、durability、read scalingをどこまで改善するのか
-- Synchronous/asynchronous replicationでCOMMITの意味はどう変わるのか
-- Replica lagとread-after-write anomalyをどう扱うのか
-- Linearizability、serializability、eventual consistencyは何が違うのか
-- QuorumのR + W > Nは、どの前提で機能するのか
+- レプリケーションは可用性、永続性、読み取りの負荷分散をどこまで改善するのか
+- 同期/非同期レプリケーションでコミットの意味はどう変わるのか
+- レプリカ遅延と書き込み後の読み取り保証異常をどう扱うのか
+- 線形化可能性、直列化可能性、結果整合性は何が違うのか
+- クォーラムのR + W > Nは、どの前提で機能するのか
 - CAPとPACELCは何を選択させるのか
 
-## replicationの目的
+## レプリケーションの目的
 
-### availability
+### 可用性
 
-一つのnodeが停止しても別copyでserviceを継続します。ただし自動failover、leader election、client routingが必要です。
+一つのノードが停止しても別複製でサービスを継続します。ただし自動フェイルオーバー、リーダー選挙、クライアント振り分けが必要です。
 
-### durability
+### 永続性
 
-別failure domainへcopyを置けば、machineやdisk喪失に耐えられます。同じrack・regionだけに置くと、共通障害へ弱いままです。
+別障害領域へ複製を置けば、機器やディスク喪失に耐えられます。同じラック・リージョンだけに置くと、共通障害へ弱いままです。
 
-### read scaling
+### 読み取りの負荷分散
 
-Read-only queryをreplicaへ分散できます。ただしlagしたreplicaから古い値を読む可能性があります。強いread consistencyが必要ならleaderやquorum readへ戻り、scaling効果が減ります。
+読み取り専用クエリをレプリカへ分散できます。ただし遅延したレプリカから古い値を読む可能性があります。強い読み取り整合性が必要ならリーダーやクォーラム読み取りへ戻り、拡張効果が減ります。
 
-### geographic locality
+### 地理的局所性
 
-Userに近いregionのreplicaからreadしlatencyを下げます。Cross-region writeの同期は光速とnetwork latencyの制約を受けます。
+利用者に近いリージョンのレプリカから読み取りし遅延時間を下げます。リージョン間書き込みの同期は光速とネットワーク遅延時間の制約を受けます。
 
-Replicationはbackupの代替ではありません。誤DELETE、schema bug、corruptionも複製され得ます。
+レプリケーションはバックアップの代替ではありません。誤削除、スキーマ不具合、破損も複製され得ます。
 
-## physicalとlogical replication
+## 物理と論理レプリケーション
 
-### physical replication
+### 物理レプリケーション
 
-WAL/page changeなどstorage engineの物理変更を転送します。
+WAL/ページ変更などストレージエンジンの物理変更を転送します。
 
 利点：
 
-- Leaderと同じphysical stateを効率よく再現
-- 全databaseを高throughputで複製しやすい
+- リーダーと同じ物理状態を効率よく再現
+- 全データベースを高処理量で複製しやすい
 
 制約：
 
-- Engine/version/platformへの依存が強い
-- Table単位の変換・filterが難しい
+- エンジン/バージョン/基盤への依存が強い
+- 表単位の変換・絞り込みが難しい
 
-### logical replication
+### 論理レプリケーション
 
-INSERT/UPDATE/DELETEなどlogical changeをrow/table単位で転送します。
+挿入/UPDATE/削除など論理変更を行/表単位で転送します。
 
 利点：
 
-- 一部tableの選択
-- version migration
-- schema変換や異種consumer
+- 一部表の選択
+- バージョン移行
+- スキーマ変換や異種コンシューマー
 - CDCへの利用
 
 制約：
 
-- DDL、sequence、large transactionなどを別途扱う
-- Apply conflictとordering
-- Row identityが必要
+- DDL、連番、大規模トランザクションなどを別途扱う
+- 適用競合と順序付け
+- 行自動採番が必要
 
-Statement-based replicationは同じSQLを再実行しますが、non-deterministic function、trigger、環境差で結果がずれる可能性があります。Row-based/logical changeは結果を送る代わりにlog量が増えます。
+文単位レプリケーションは同じSQLを再実行しますが、非決定論的関数、トリガー、環境差で結果がずれる可能性があります。行単位/論理変更は結果を送る代わりにログ量が増えます。
 
-## leader/follower
+## リーダー／フォロワー
 
-一つのleaderがwriteを受け、replication logをfollowersへ送ります。
+一つのリーダーが書き込みを受け、レプリケーションログをフォロワー群へ送ります。
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant Leader
-    participant F1 as Follower 1
-    participant F2 as Follower 2
-    Client->>Leader: WRITE
-    Leader->>Leader: append local log
-    Leader->>F1: replicate
-    Leader->>F2: replicate
-    F1-->>Leader: ack
-    F2-->>Leader: ack
-    Leader-->>Client: COMMIT
+    participant Client as クライアント
+    participant Leader as リーダー
+    participant F1 as フォロワー 1
+    participant F2 as フォロワー 2
+    Client->>Leader: 書き込み
+    Leader->>Leader: 追記局所ログ
+    Leader->>F1: 複製
+    Leader->>F2: 複製
+    F1-->>Leader: 確認応答
+    F2-->>Leader: 確認応答
+    Leader-->>Client: コミット
 ```
 
 利点：
 
-- Write orderをleaderで一本化
-- Conflict解決が比較的単純
-- Followerをread/standbyへ使える
+- 書き込み注文をリーダーで一本化
+- 競合解決が比較的単純
+- フォロワーを読み取り/待機系へ使える
 
 課題：
 
-- Leaderがwrite bottleneck
-- Leader failure時の選出
-- Lagしたfollowerの昇格によるdata loss
-- Split brain防止
+- リーダーが書き込みボトルネック
+- リーダー 障害時の選出
+- 遅延したフォロワーの昇格によるデータ損失
+- スプリットブレイン防止
 
-## synchronous replication
+## 同期レプリケーション
 
-Leaderがclientへcommitを返す前に、指定replicaのackを待ちます。
+リーダーがクライアントへコミットを返す前に、指定レプリカの確認応答を待ちます。
 
 ```text
-commit latency
-≈ leader local durability
-+ synchronous replica round trip
-+ replica durability policy
+コミット遅延時間
+≈ リーダーでのローカル永続化
++ 同期レプリカ往復通信
++ レプリカ永続性方針
 ```
 
 利点：
 
-- Ackしたreplicaが残ればcommitted dataを失いにくい
-- Failover時のRPOを小さくできる
+- 確認応答したレプリカが残ればコミット済みデータを失いにくい
+- フェイルオーバー時のRPOを小さくできる
 
 欠点：
 
-- Network/replica latencyがwrite latencyへ加わる
-- 必要replicaが利用不能ならwrite停止
-- Slow replicaがtail latencyを上げる
+- ネットワーク/レプリカ遅延時間が書き込み遅延時間へ加わる
+- 必要レプリカが利用不能なら書き込み停止
+- 低速レプリカが裾の遅延時間を上げる
 
-「synchronous」のackがmemory受信、OS write、fsync、apply完了のどこを意味するか確認します。
+「同期」の確認応答がメモリ受信、OS書き込み、fsync、適用完了のどこを意味するか確認します。
 
-## asynchronous replication
+## 非同期レプリケーション
 
-Leaderはlocal commit後、replicaのackを待たずにclientへ返します。
+リーダーは局所コミット後、レプリカの確認応答を待たずにクライアントへ返します。
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant Leader
-    participant Follower
-    Client->>Leader: WRITE
-    Leader->>Leader: local COMMIT
-    Leader-->>Client: success
-    Note over Leader: ここでfailure
-    Leader--xFollower: 未送信log
+    participant Client as クライアント
+    participant Leader as リーダー
+    participant Follower as フォロワー
+    Client->>Leader: 書き込み
+    Leader->>Leader: 局所コミット
+    Leader-->>Client: 成功
+    Note over Leader: ここで障害
+    Leader--xFollower: 未送信ログ
 ```
 
 利点：
 
-- Write latencyが低い
-- Replica failure時もleaderが進行しやすい
+- 書き込み遅延時間が低い
+- レプリカ障害時もリーダーが進行しやすい
 
 欠点：
 
-- Commit済みでもreplica未到達dataをfailoverで失い得る
-- Read replicaが古い
-- Lagが無制限に広がる可能性
+- コミット済みでもレプリカ未到達データをフェイルオーバーで失い得る
+- 読み取りレプリカが古い
+- 遅延が無制限に広がる可能性
 
-### semi-synchronous
+### 準同期
 
-少なくとも1台への受信ackを待つなど、中間の保証を取ります。Apply/fsyncまで待つかで意味が変わります。
+少なくとも1台への受信確認応答を待つなど、中間の保証を取ります。適用/fsyncまで待つかで意味が変わります。
 
-## replica lag
+## レプリカ遅延
 
-Lagはleader log位置とreplica receive/replay位置の差です。
+遅延はリーダー ログ位置とレプリカ受信/再生位置の差です。
 
 原因：
 
-- Network bandwidth/latency
-- Replica CPU/I/O不足
-- Large transaction
-- Long-running queryとのconflict
-- Single-thread apply
-- DDL/index build
-- Burst write
+- ネットワーク帯域幅/遅延時間
+- レプリカCPU/I/O不足
+- 大規模トランザクション
+- 長時間クエリとの競合
+- 単一スレッド適用
+- DDL/インデックス構築
+- 書き込みの急増
 
-Lagを「秒」だけでなく、byte/LSN差、receive lag、flush lag、replay lagへ分けると原因を特定しやすくなります。
+遅延を「秒」だけでなく、バイト/LSN差、受信遅延、書き出し遅延、再生遅延へ分けると原因を特定しやすくなります。
 
-## read consistency
+## 読み取り整合性
 
-### read-after-write
+### 書き込み後の読み取り保証
 
-Userがprofileを更新した直後、lagging replicaから古いprofileを読む問題です。
-
-対策：
-
-- 一定時間leaderへreadをstickする
-- Write token/LSNをclientへ返し、その位置まで追いついたreplicaを選ぶ
-- Session内readをleaderへ送る
-- Synchronous applyを待つ
-
-### monotonic reads
-
-一度新しい値を読んだuserが、次のrequestで古いreplicaへ当たり過去へ戻らない保証です。
+利用者がプロフィールを更新した直後、遅延したレプリカから古いプロフィールを読む問題です。
 
 対策：
 
-- Sessionを同じreplicaへroute
-- 最後に読んだversion以上のreplicaを選ぶ
+- 一定時間リーダーへ読み取りを固定する
+- 書き込みトークン/LSNをクライアントへ返し、その位置まで追いついたレプリカを選ぶ
+- セッション内読み取りをリーダーへ送る
+- 同期適用を待つ
 
-### consistent prefix
+### 単調読み取り
 
-因果的に順序づいたwriteを順序どおり観測します。
+一度新しい値を読んだ利用者が、次のリクエストで古いレプリカへ当たり過去へ戻らない保証です。
+
+対策：
+
+- セッションを同じレプリカへ振り分け
+- 最後に読んだバージョン以上のレプリカを選ぶ
+
+### 一貫した接頭辞
+
+因果的に順序づいた書き込みを順序どおり観測します。
 
 ```text
-1. order created
-2. payment captured
+1. 注文作成
+2. 支払いの売上確定
 
-paymentだけ先に見えないこと
+支払いだけ先に見えないこと
 ```
 
-Partitionごとに別logを持つsystemでは、異なるkey間の順序を自動保証しない場合があります。
+パーティションごとに別ログを持つシステムでは、異なるキー間の順序を自動保証しない場合があります。
 
-## consistency model
+## 整合性モデル
 
-### linearizability
+### 線形化可能性
 
-各operationがrequestとresponseの間の一点で瞬時に起きたように見え、real-time orderを守ります。
+各操作がリクエストと応答の間の一点で瞬時に起きたように見え、実時間順序を守ります。
 
-Write完了後に開始したreadは、そのwriteかそれ以降を返す必要があります。
+書き込み完了後に開始した読み取りは、その書き込みかそれ以降を返す必要があります。
 
-単一object/registerに対する強い保証として理解できます。
+単一オブジェクト/レジスターに対する強い保証として理解できます。
 
-### serializability
+### 直列化可能性
 
-複数transactionの結果が何らかのserial orderと同等である保証です。Real-time orderを必ず守るとは限りません。
+複数トランザクションの結果が何らかの直列注文と同等である保証です。実時間順序を必ず守るとは限りません。
 
-### strict serializability
+### 厳格直列化可能性
 
-Serializabilityにreal-time orderを加えます。Transaction全体のlinearizableな振る舞いに近い強い保証です。
+直列化可能性に実時間順序を加えます。トランザクション全体の線形化可能な振る舞いに近い強い保証です。
 
 ```text
-Linearizability: operation/objectのreal-time consistency
-Serializability: transaction間のisolation
-Strict serializability: serializability + real-time order
+線形化可能性: 操作/オブジェクトの実時間整合性
+直列化可能性: トランザクション間の分離性
+厳格な直列化可能性: 直列化可能性 + 実時間順序
 ```
 
 二つは同じ「強い整合性」という語で混同されがちですが、解く問題が異なります。
 
-### eventual consistency
+### 結果整合性
 
-新しいwriteが止まれば、最終的にreplicaが収束する保証です。「いつ収束するか」「途中で何を読めるか」は別途定義が必要です。
+新しい書き込みが止まれば、最終的にレプリカが収束する保証です。「いつ収束するか」「途中で何を読めるか」は別途定義が必要です。
 
-Session guaranteeやconflict resolutionを追加しないeventual consistencyは、applicationへ大きな複雑性を渡します。
+セッション保証や競合解決を追加しない結果整合性は、アプリケーションへ大きな複雑性を渡します。
 
-### causal consistency
+### 因果整合性
 
-因果関係のあるoperation順を全clientが守ります。無関係なconcurrent operationは異なる順に見えても構いません。
+因果関係のある操作順を全クライアントが守ります。無関係な並行する操作は異なる順に見えても構いません。
 
-Commentへのreplyが元commentより先に見えない、といった性質を守ります。Version vector、logical clock、dependency metadataなどを使えます。
+コメントへの返信が元のコメントより先に見えない、といった性質を守ります。バージョンベクトル、論理時計、依存関係メタデータなどを使えます。
 
-## multi-leader replication
+## 複数リーダー レプリケーション
 
-複数leaderがwriteを受け、leader間でreplicateします。Multi-regionでlocal write latencyを下げられますが、同じdataへのconcurrent writeがconflictします。
+複数リーダーが書き込みを受け、リーダー間で複製します。複数リージョンで局所書き込み遅延時間を下げられますが、同じデータへの並行する書き込みが競合します。
 
-Conflict resolution：
+競合解決：
 
-- Last-write-wins
-- Version vectorでconcurrentを検出
-- Field-level merge
+- 最終書き込み優先
+- バージョンベクトルで並行するを検出
+- フィールド単位のマージ
 - CRDT
-- User/application resolution
+- 利用者/アプリケーション解決
 
-Last-write-winsは単純ですが、clock skewやnetwork delayで正しいbusiness orderを表せず、dataを黙って失う可能性があります。
+最終書き込み優先は単純ですが、時計ずれやネットワーク遅延で正しい業務注文を表せず、データを黙って失う可能性があります。
 
-Writeをregion/user/keyへpartitionし、一つのkeyは一leaderだけがownerになる設計でconflictを減らせます。
+書き込みをリージョン/利用者/キーへパーティションし、一つのキーは一リーダーだけが所有者になる設計で競合を減らせます。
 
-## leaderless replication
+## リーダーレスレプリケーション
 
-Client/coordinatorが複数replicaへwriteし、複数からreadします。
+クライアント/調整役が複数レプリカへ書き込みし、複数から読み取りします。
 
-N replica中、W台のwrite ack、R台のread responseを要求するquorumを考えます。
+Nレプリカ中、W台の書き込み確認応答、R台の読み取り応答を要求するクォーラムを考えます。
 
 ```text
 N = 3
@@ -280,152 +280,152 @@ R = 2
 R + W = 4 > N
 ```
 
-Read setとwrite setが少なくとも1 replicaで重なることを期待します。
+読み取り集合と書き込み集合が少なくとも1レプリカで重なることを期待します。
 
 ```mermaid
 flowchart TB
-    Client --> R1["Replica 1<br/>v5"]
-    Client --> R2["Replica 2<br/>v5"]
-    Client -.-> R3["Replica 3<br/>v4"]
+    Client --> R1["レプリカ1<br/>v5"]
+    Client --> R2["レプリカ2<br/>v5"]
+    Client -.-> R3["レプリカ3<br/>v4"]
 ```
 
-## quorumの前提と限界
+## クォーラムの前提と限界
 
-R + W > Nだけでlinearizabilityが自動的に得られるわけではありません。
+R + W > Nだけで線形化可能性が自動的に得られるわけではありません。
 
 必要な検討：
 
-- Readが全responseから最新versionを判定できる
-- Version orderが正しく比較できる
-- Write同士のoverlap/conflict
-- Sloppy quorumで本来のreplica集合外へwriteしていないか
-- Concurrent read/write
-- Failed writeが一部replicaへ残る
-- Clock-based LWWのskew
+- 読み取りが全応答から最新バージョンを判定できる
+- バージョン注文が正しく比較できる
+- 書き込み同士の重なり/競合
+- 緩いクォーラムで本来のレプリカ集合外へ書き込みしていないか
+- 並行する読み取り/書き込み
+- 失敗書き込みが一部レプリカへ残る
+- 時計基準LWWの偏り
 
-Strong consistencyには通常、consensus/primary、read repairだけでなく、write orderとcommit ruleが必要です。
+強い整合性には通常、合意/主系、読み取り時修復だけでなく、書き込み注文とコミット規則が必要です。
 
-## read repairとhinted handoff
+## 読み取り時修復とヒント付き引き渡し
 
-### read repair
+### 読み取り時修復
 
-Read時にreplica versionを比較し、古いreplicaへ新しいvalueを書き戻します。Read trafficがあるkeyは収束しやすくなります。
+読み取り時にレプリカバージョンを比較し、古いレプリカへ新しい値を書き戻します。読み取り通信量があるキーは収束しやすくなります。
 
-### anti-entropy
+### 不整合の定期修復
 
-BackgroundでMerkle treeなどを比較し、不一致rangeを修復します。Readされないkeyも収束させます。
+バックグラウンドでMerkle木などを比較し、不一致範囲を修復します。読み取りされないキーも収束させます。
 
-### hinted handoff
+### ヒント付き引き渡し
 
-Target replicaがdown中、別nodeが一時的にwriteを保持し、復帰後に渡します。Availabilityを上げますが、sloppy quorumとconsistency semanticsを複雑にします。
+対象レプリカが停止中、別ノードが一時的に書き込みを保持し、復帰後に渡します。可用性を上げますが、緩いクォーラムと整合性意味論を複雑にします。
 
-## failover
+## フェイルオーバー
 
-Leader failure時：
+リーダー 障害時：
 
-1. Failureを検出する
-2. Candidate followerのlog freshnessを比較する
-3. 一つをnew leaderへ昇格する
-4. Client routingを変更する
-5. Old leader復帰時にfollowerへ戻し、divergent logを処理する
+1. 障害を検出する
+2. 候補フォロワーのログ新しさを比較する
+3. 一つを新しいリーダーへ昇格する
+4. クライアント振り分けを変更する
+5. 古いリーダー復帰時にフォロワーへ戻し、分岐したログを処理する
 
-Failure detectorは完全ではありません。Nodeがdownしたのかnetworkだけ切れたのか区別できません。
+障害検出器は完全ではありません。ノードが停止したのかネットワークだけ切れたのか区別できません。
 
-### split brain
+### スプリットブレイン
 
-Old/new leaderが同時にwriteを受ける状態です。
+古い/新しいリーダーが同時に書き込みを受ける状態です。
 
 対策：
 
-- Majority consensus
-- Leaseとfencing token
-- Shared storage fencing
-- Old leaderのwrite権限を失効
+- 過半数合意
+- リースとフェンシングトークン
+- 共有ストレージフェンシング
+- 古いリーダーの書き込み権限を失効
 
-「VIPを移した」だけでは、old leaderがbackground jobや直接clientからwriteを受け続ける可能性があります。
+「仮想IPを移した」だけでは、古いリーダーがバックグラウンドジョブや直接クライアントから書き込みを受け続ける可能性があります。
 
 ## CAP
 
-Network partitionが起きたとき、次の両方を常に満たせないという問題です。
+ネットワーク分断が起きたとき、次の両方を常に満たせないという問題です。
 
-- **Consistency**：ここではlinearizable registerに近い一貫した応答
-- **Availability**：partitionしていない各nodeへのrequestがresponseを返す
+- **整合性**：ここでは線形化可能レジスターに近い一貫した応答
+- **可用性**：パーティションしていない各ノードへのリクエストが応答を返す
 
-Partition toleranceは分散systemでは選択肢というより前提です。Partition時に：
+パーティション許容は分散システムでは選択肢というより前提です。パーティション時に：
 
-- CP：一部requestを拒否/待機してconsistencyを守る
-- AP：各partitionで応答し、後でconflict/収束を扱う
+- CP：一部リクエストを拒否/待機して整合性を守る
+- AP：各パーティションで応答し、後で競合/収束を扱う
 
-System全体を一語でCP/APと呼ぶより、operationごとのmodeを見るべきです。Readはstaleで応答しwriteはmajority必須、という組み合わせもあります。
+システム全体を一語でCP/APと呼ぶより、操作ごとの方式を見るべきです。読み取りは古いで応答し書き込みは過半数必須、という組み合わせもあります。
 
 ## PACELC
 
-Partitionがない通常時でも、consistencyを強めるためremote replicaを待つとlatencyが増えます。
+パーティションがない通常時でも、整合性を強めるため遠隔レプリカを待つと遅延時間が増えます。
 
 ```text
-if Partition:
-  Availability vs Consistency
-Else:
-  Latency vs Consistency
+パーティション発生時:
+  可用性対整合性
+それ以外:
+  遅延時間対整合性
 ```
 
-Cross-region synchronous replicationはconsistency/durabilityを高め、normal operationのwrite latencyを増やします。
+リージョン間同期レプリケーションは整合性/永続性を高め、通常運用の書き込み遅延時間を増やします。
 
 ## 設計例
 
-### Payment ledger
+### 決済台帳
 
-- Strong/strict serializable transaction
-- Synchronous durable replicas
-- Leader/consensus read
-- Availability低下を受け入れて二重決済を防ぐ
+- 強い／厳格な直列化可能トランザクション
+- 同期的に永続化するレプリカ群
+- リーダー/合意読み取り
+- 可用性低下を受け入れて二重決済を防ぐ
 
-### Product catalog
+### 商品カタログ
 
-- Leader write、async read replicas
-- Stale readを秒単位で許容
-- Admin update後だけleader read
+- リーダー 書き込み、非同期読み取りレプリカ群
+- 古い読み取りを秒単位で許容
+- 管理者による更新後だけリーダー 読み取り
 
-### Like count
+### 「いいね」の件数
 
-- Local incrementをmerge
-- Eventual consistency
-- Exact real-time countよりavailability/latency優先
+- 各レプリカの増分をマージ
+- 結果整合性
+- 厳密なリアルタイム件数より可用性/遅延時間優先
 
-同じservice内でもdata種別でconsistency requirementは異なります。
+同じサービス内でもデータ種別で整合性要件は異なります。
 
 ## よくある誤解
 
-### 「replicaを増やせばwrite throughputも増える」
+### 「レプリカを増やせば書き込み処理量も増える」
 
-Single-leaderではwriteはleaderへ集中し、replica送信分のworkも増えます。Read scalingとは別です。
+単一リーダーでは書き込みはリーダーへ集中し、レプリカ送信分の処理も増えます。読み取りの負荷分散とは別です。
 
-### 「R + W > Nならstrong consistency」
+### 「R + W > Nなら強い整合性」
 
-Version order、concurrent operation、sloppy quorum、failed writeなど追加条件があります。
+バージョン注文、並行する操作、緩いクォーラム、失敗書き込みなど追加条件があります。
 
-### 「eventual consistencyは一定秒後に必ず一致する」
+### 「結果整合性は一定秒後に必ず一致する」
 
-Eventualは新しいwriteが止まった場合の収束です。Bounded stalenessではありません。
+結果整合的なは新しい書き込みが止まった場合の収束です。制限付き古さではありません。
 
 ## まとめ
 
-- Replicationはavailability、durability、read scalingを改善するが、lagとconflictを生む
-- Synchronous replicationはreplica ackをcommit latencyへ含め、asynchronousはdata loss windowを持つ
-- Read-after-write、monotonic read、consistent prefixはsessionから見える重要な保証である
-- Linearizabilityはreal-time operation order、serializabilityはtransaction isolationを扱う
-- Eventual consistencyだけでは中間状態と収束時間を説明し切れない
-- Quorumはintersectionを作るが、R + W > Nだけでlinearizabilityは保証されない
-- Failoverにはleader freshness、routing、fencing、split brain防止が必要
-- CAPはpartition時、PACELCは通常時latencyも含むtrade-offを示す
+- レプリケーションは可用性、永続性、読み取りの負荷分散を改善するが、遅延と競合を生む
+- 同期レプリケーションはレプリカ確認応答をコミット遅延時間へ含め、非同期はデータ損失の時間幅を持つ
+- 書き込み後の読み取り保証、単調読み取り、一貫した接頭辞はセッションから見える重要な保証である
+- 線形化可能性は実時間操作順序、直列化可能性はトランザクション分離性を扱う
+- 結果整合性だけでは中間状態と収束時間を説明し切れない
+- クォーラムは共通部分を作るが、R + W > Nだけで線形化可能性は保証されない
+- フェイルオーバーにはリーダー 新しさ、振り分け、フェンシング、スプリットブレイン防止が必要
+- CAPはパーティション時、PACELCは通常時遅延時間も含むトレードオフを示す
 
 ## 確認問題
 
-1. Synchronous replicationのackがreceive、flush、applyのどこかで保証が変わる理由を説明してください。
-2. Read-after-writeをreplica routingで守る方法を二つ挙げてください。
-3. Linearizabilityとserializabilityの違いを説明してください。
+1. 同期レプリケーションの確認応答が受信、書き出し、適用のどこかで保証が変わる理由を説明してください。
+2. 書き込み後の読み取り保証をレプリカ振り分けで守る方法を二つ挙げてください。
+3. 線形化可能性と直列化可能性の違いを説明してください。
 4. R + W > Nでも古い値を返し得る条件を挙げてください。
-5. 商品catalogとpayment ledgerで異なるconsistencyを選ぶ理由は何ですか。
+5. 商品カタログと決済台帳で異なる整合性を選ぶ理由は何ですか。
 
 ## 参考資料
 
@@ -434,4 +434,4 @@ Eventualは新しいwriteが止まった場合の収束です。Bounded stalenes
 - [Seth Gilbert and Nancy Lynch, “Brewer’s Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services”](https://doi.org/10.1145/564585.564601)
 - [Giuseppe DeCandia et al., “Dynamo: Amazon’s Highly Available Key-value Store”](https://doi.org/10.1145/1294261.1294281)
 
-次章では、failureとpartitionがある中で一つのleaderと複製log順序へ合意するRaftを扱います。
+次章では、障害とパーティションがある中で一つのリーダーと複製ログ順序へ合意するRaftを扱います。

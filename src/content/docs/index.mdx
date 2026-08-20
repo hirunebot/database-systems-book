@@ -1,5 +1,5 @@
 ---
-title: Database Systems Book
+title: データベースシステム入門
 description: Webアプリケーション開発者のための、仕組みから学ぶデータベースシステム入門
 template: splash
 hero:
@@ -19,34 +19,34 @@ import { CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 <CardGrid>
   <LinkCard
-    title="Part I — データベースを捉える"
+    title="第I部 — データベースを捉える"
     href="/01-foundations/01-overview/"
     description="リレーショナルモデルと、SQLからストレージまでの全体像を整理します。"
   />
   <LinkCard
-    title="Part II — ストレージとインデックス"
+    title="第II部 — ストレージとインデックス"
     href="/02-storage/03-pages-records-buffer-pool/"
-    description="ページ、バッファプール、B+tree、ハッシュ、LSM-treeを扱います。"
+    description="ページ、バッファプール、B+木、ハッシュ、LSM-木を扱います。"
   />
   <LinkCard
-    title="Part III — クエリ処理"
+    title="第III部 — クエリ処理"
     href="/03-query-processing/06-sql-logical-plans/"
-    description="SQL、論理・物理実行計画、join、コストベース最適化をつなぎます。"
+    description="SQL、論理・物理実行計画、結合、コストベース最適化をつなぎます。"
   />
   <LinkCard
-    title="Part IV — トランザクションと障害回復"
+    title="第IV部 — トランザクションと障害回復"
     href="/04-transactions/10-acid-isolation/"
-    description="ACID、MVCC、lock、WAL、checkpoint、redo/undoを理解します。"
+    description="ACID、MVCC、ロック、WAL、チェックポイント、再実行/取り消しを理解します。"
   />
   <LinkCard
-    title="Part V — 分散データベース"
+    title="第V部 — 分散データベース"
     href="/05-distributed-db/13-replication-consistency/"
-    description="replication、consensus、Raft、sharding、分散トランザクションへ進みます。"
+    description="レプリケーション、合意、Raft、シャーディング、分散トランザクションへ進みます。"
   />
   <LinkCard
-    title="Part VI — アプリケーションと実運用"
+    title="第VI部 — アプリケーションと実運用"
     href="/06-operations/17-application-operations/"
-    description="接続、migration、監視、backup、failoverを実装判断へ結びつけます。"
+    description="接続、移行、監視、バックアップ、フェイルオーバーを実装判断へ結びつけます。"
   />
 </CardGrid>
 

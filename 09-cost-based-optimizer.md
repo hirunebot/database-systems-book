@@ -2,29 +2,29 @@
 
 ## この章の役割
 
-optimizerが候補計画を比較する仕組みと、推定の誤りから不適切な計画が選ばれる理由を扱う。
+最適化器が候補計画を比較する仕組みと、推定の誤りから不適切な計画が選ばれる理由を扱う。
 
 ## この章で答える問い
 
-- cost-based optimizerは何をコストとしているのか
-- cardinality estimationが計画選択の中心になるのはなぜか
-- optimizerの判断が外れたとき、どこを観察すればよいのか
+- コストベース最適化器は何をコストとしているのか
+- 行数推定が計画選択の中心になるのはなぜか
+- 最適化器の判断が外れたとき、どこを観察すればよいのか
 
 ## 扱う内容
 
-- rule-based optimizationとcost-based optimization
-- table/index statistics、NDV、histogram、most common values
-- selectivityとcardinality estimation
+- 規則ベース最適化とコストベース最適化
+- 表/インデックス統計情報、NDV、ヒストグラム、最頻値
+- 選択率と行数推定
 - 列間相関、データ偏り、古い統計による推定誤差
-- access pathとjoin algorithmの候補生成
-- join order探索、動的計画法、探索空間の削減
-- I/O、CPU、memory、networkを含むcost model
-- prepared statement、plan cache、parameter-sensitive plan
-- EXPLAINとEXPLAIN ANALYZEの読み分け
+- アクセス経路と結合アルゴリズムの候補生成
+- 結合順序探索、動的計画法、探索空間の削減
+- I/O、CPU、メモリ、ネットワークを含むコストモデル
+- プリペアド文、計画キャッシュ、パラメーター依存計画
+- EXPLAINとEXPLAIN解析の読み分け
 
 ## 図解・具体例
 
-推定行数と実行行数がずれ、nested loopから大量のtable lookupが発生する例を段階的に診断する。
+推定行数と実行行数がずれ、入れ子ループから大量の表の参照が発生する例を段階的に診断する。
 
 ## 演習・確認課題
 
@@ -32,4 +32,4 @@ optimizerが候補計画を比較する仕組みと、推定の誤りから不�
 
 ## 読了時の到達目標
 
-「optimizerが間違えた」で止まらず、推定値、候補計画、コストの連鎖として説明できる。
+「最適化器が間違えた」で止まらず、推定値、候補計画、コストの連鎖として説明できる。
