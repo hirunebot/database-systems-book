@@ -1,136 +1,136 @@
 ---
 title: 17. アプリケーションからのDB利用と運用
-description: connection、query、transaction、migration、monitoring、backup、failoverをend-to-endで設計する。
+description: 接続、クエリ、トランザクション、移行、監視、バックアップ、フェイルオーバーを一貫して設計する。
 sidebar:
   order: 17
   label: 17. アプリケーションからのDB利用と運用
 ---
 
-DB内部の仕組みを理解する目的は、実際のapplicationと運用で正しい判断をすることです。遅いAPIの原因はSQL textだけでなく、connection待ち、transaction境界、lock、replica lag、migration、retry stormにあるかもしれません。
+DB内部の仕組みを理解する目的は、実際のアプリケーションと運用で正しい判断をすることです。遅いAPIの原因はSQL文字列だけでなく、接続待ち、トランザクション境界、ロック、レプリカ遅延、移行、再試行の集中にあるかもしれません。
 
-この章では、requestがDBへ到達する前後を含むend-to-endな設計と診断を扱います。
+この章では、リクエストがDBへ到達する前後を含む端から端までのな設計と診断を扱います。
 
 ## この章で答える問い
 
-- Connection poolはなぜ必要で、なぜ大きすぎても遅くなるのか
-- Prepared statementとparameterはsecurityとplanへどう影響するのか
-- N+1、OFFSET、長時間transactionはDB内部で何を増やすのか
-- Schema migrationをzero/low downtimeで行うにはどう段階化するのか
-- Slow query、lock wait、Buffer Pool、replica lagをどう関連づけるのか
-- Backupとfailoverを「設定済み」ではなく「復旧可能」とどう証明するのか
+- 接続プールはなぜ必要で、なぜ大きすぎても遅くなるのか
+- プリペアド文とパラメーターはセキュリティと計画へどう影響するのか
+- N+1、オフセット、長時間トランザクションはDB内部で何を増やすのか
+- スキーマ移行を停止時間ゼロ／最小で行うにはどう段階化するのか
+- 低速クエリ、ロック待機、バッファプール、レプリカ遅延をどう関連づけるのか
+- バックアップとフェイルオーバーを「設定済み」ではなく「復旧可能」とどう証明するのか
 
-## request path
+## リクエスト経路
 
 ```mermaid
 flowchart LR
-    Client --> LB["Load balancer"]
-    LB --> API["API server"]
-    API --> Pool["Connection pool"]
-    Pool --> Primary["DB primary"]
-    Pool --> Replica["Read replica"]
+    Client --> LB["負荷分散器"]
+    LB --> API["APIサーバー"]
+    API --> Pool["接続プール"]
+    Pool --> Primary["DB主系"]
+    Pool --> Replica["読み取りレプリカ"]
     Primary --> Storage
     Primary --> Replica
 ```
 
-API latencyは各区間の合計です。
+API遅延時間は各区間の合計です。
 
 ```text
-request latency
-= queue at API
-+ pool wait
-+ network
-+ DB execution
-+ lock/I/O wait
-+ serialization
-+ response transfer
+リクエスト遅延時間
+= APIでの待ち行列
++ 接続プール待ち
++ ネットワーク
++ DB実行
++ ロック/I/O待機
++ 直列化
++ 応答転送
 ```
 
-DB query timeだけを測ると、pool waitやapplication側N+1を見落とします。Traceへconnection取得とtransaction spanを含めます。
+DBクエリ時間だけを測ると、接続プール待ちやアプリケーション側N+1を見落とします。トレースへ接続取得とトランザクション区間を含めます。
 
-## connectionのcost
+## 接続のコスト
 
-Connection確立には：
+接続確立には：
 
-- TCP/TLS handshake
-- Authentication
-- Process/thread/session allocation
-- Session parameter setup
-- Prepared statement/cache warm-up
+- TCP/TLSハンドシェイク
+- 認証
+- 処理/スレッド/セッション割り当て
+- セッションパラメーター 設定
+- プリペアド文/キャッシュウォームアップ
 
-が必要です。Requestごとに新規connectionを作るとlatencyとDB resourceを浪費します。
+が必要です。リクエストごとに新規接続を作ると遅延時間とDB資源を浪費します。
 
-## connection pool
+## 接続プール
 
-Poolは少数の長寿命connectionをapplication request間で再利用します。
+プールは少数の長寿命接続をアプリケーションリクエスト間で再利用します。
 
 ```mermaid
 flowchart TB
-    R1["Request 1"] --> P["Pool: 20 connections"]
-    R2["Request 2"] --> P
-    R3["Request 3"] --> P
+    R1["リクエスト1"] --> P["プール: 20接続"]
+    R2["リクエスト2"] --> P
+    R3["リクエスト3"] --> P
     P --> DB["DB"]
 ```
 
-Poolの役割：
+プールの役割：
 
-- Connection確立costを償却
-- DBへ流すconcurrencyを制限
-- Requestをqueueしてbackpressure
-- Broken/expired connectionを交換
+- 接続確立コストを償却
+- DBへ流す同時実行性を制限
+- リクエストをキューして逆圧
+- 壊れた/期限切れ接続を交換
 
-### poolを大きくすれば速くなるわけではない
+### プールを大きくすれば速くなるわけではない
 
-DBが同時に効率よく処理できるquery数には上限があります。Connectionを増やしすぎると：
+DBが同時に効率よく処理できるクエリ数には上限があります。接続を増やしすぎると：
 
-- CPU context switch
-- Buffer/cache contention
-- Lock queue
-- Per-session memory
-- I/O queue
-- Transaction数
+- CPUコンテキストスイッチ
+- バッファ/キャッシュ競合
+- ロックキュー
+- セッションごとのメモリ
+- I/Oキュー
+- トランザクション数
 
-が増え、throughputが頭打ちになった後latencyだけ悪化します。
+が増え、処理量が頭打ちになった後遅延時間だけ悪化します。
 
-### sizing
+### 大きさの決定
 
 万能な式はありません。次から測定します。
 
-1. DB CPU/coreとstorage capacity
-2. QueryのCPU/I/O/lock比率
-3. API instance数
-4. Replicaへの分散
-5. Target latency
-6. Failure時のinstance増加
+1. DB CPU/コアとストレージ容量
+2. クエリのCPU/I/O/ロック比率
+3. APIインスタンス数
+4. レプリカへの分散
+5. 対象遅延時間
+6. 障害時のインスタンス増加
 
 ```text
-total possible DB connections
-= pool per instance
-× application instances
-× process/workers
+DB接続総数
+= インスタンス当たりの接続プール数
+× アプリケーションインスタンス数
+× プロセス／ワーカー数
 ```
 
-通常時10 instance × pool 20 = 200でも、autoscalingで50 instanceなら1000です。DB max connectionと一致させるだけでなく、実効concurrencyを小さく制御します。
+通常時10インスタンス × プール20 = 200でも、自動拡張で50インスタンスなら1000です。DBの最大接続数と一致させるだけでなく、実効同時実行性を小さく制御します。
 
-### pool timeout
+### プールタイムアウト
 
-Poolが空のとき無制限に待たせるとrequest queueが増え、user timeout後もDB workが残ります。
+プールが空のとき無制限に待たせるとリクエストキューが増え、利用者タイムアウト後もDB処理が残ります。
 
-- Pool acquisition timeout
-- Request deadline
-- Query/statement timeout
-- Transaction timeout
+- 接続プール取得タイムアウト
+- リクエスト期限
+- クエリ/文のタイムアウト
+- トランザクションタイムアウト
 
-を整合させ、上流deadlineよりDB timeoutを少し短くします。
+を整合させ、上流期限よりDBタイムアウトを少し短くします。
 
-## connection state
+## 接続状態
 
-Poolへ返す前にtransaction、temporary setting、role、search_path、prepared stateなどをresetします。
+プールへ返す前にトランザクション、一時設定、ロール、search_path、準備済み状態などを初期化します。
 
-最も危険なのはopen transactionのままconnectionを返すことです。次requestが同じtransactionを引き継いだり、lock/snapshotを保持し続けたりします。
+最も危険なのは未完了トランザクションのまま接続を返すことです。次リクエストが同じトランザクションを引き継いだり、ロック/スナップショットを保持し続けたりします。
 
-ORM/session frameworkのcleanup保証を確認し、idle in transactionを監視します。
+ORM／セッションフレームワークの後始末保証を確認し、トランザクション内でアイドル状態の接続を監視します。
 
-## prepared statementとbind parameter
+## プリペアド文とバインドパラメーター
 
 ```sql
 SELECT id, status
@@ -139,81 +139,81 @@ WHERE customer_id = $1
   AND ordered_at >= $2;
 ```
 
-Bind parameterの利点：
+バインドパラメーターの利点：
 
-- SQL injectionを防ぐ境界を作る
-- Parse/planを再利用できる
-- Typeを明確にできる
-- Loggingでstatementとvalueを分離
+- SQLインジェクションを防ぐ境界を作る
+- 解析/計画を再利用できる
+- 型を明確にできる
+- ログ記録で文と値を分離
 
-Table名、column名、ORDER BY方向は通常value parameterにできません。Allowlistからidentifierを選び、安全にquoteします。
+表名、列名、ORDER BY方向は通常値パラメーターにできません。許可リストから識別子を選び、安全に引用符で囲みします。
 
-### plan cache
+### 計画キャッシュ
 
-Prepared statementを再利用するとplanning costを減らせますが、parameter distributionによって最適planが異なります。
+プリペアド文を再利用すると計画コストを減らせますが、パラメーター 分布によって最適計画が異なります。
 
-- Generic plan：再利用が安い、hot/cold value差に弱い
-- Custom plan：valueに適応、毎回planning cost
+- 汎用計画：再利用が安い、高負荷/低負荷値差に弱い
+- カスタム計画：値に適応、毎回計画コスト
 
-High skew queryではactual parameter別latencyとplanを観測します。
+偏りの大きいクエリでは実際のパラメーター別遅延時間と計画を観測します。
 
-## transaction boundary
+## トランザクション境界
 
-Transactionは短く、必要なDB操作だけを含めます。
+トランザクションは短く、必要なDB操作だけを含めます。
 
 悪い例：
 
 ```text
 BEGIN
 SELECT ... FOR UPDATE
-call payment API (2 seconds)
-wait user/network
+支払いAPIを呼び出し（2秒）
+待機利用者/ネットワーク
 UPDATE
-COMMIT
+コミット
 ```
 
-Lockを保持したままnetworkを待ち、timeout/deadlockを増やします。
+ロックを保持したままネットワークを待ち、タイムアウト/デッドロックを増やします。
 
 代替：
 
-- Payment intent/idempotencyで外部operationを分離
-- Reservation statusをcommitしてSaga化
-- Optimistic versionで再検証
-- Outboxでeventをtransaction後に発行
+- 支払い意図/冪等性で外部操作を分離
+- 予約状態をコミットしてSaga化
+- 楽観的バージョンで再検証
+- アウトボックスでイベントをトランザクション後に発行
 
-DB transactionは外部API callをrollbackできません。
+DBトランザクションは外部API呼び出しをロールバックできません。
 
-## N+1 query
+## N+1クエリ
 
-注文100件を読み、各注文のitemsを個別queryすると101 queryになります。
+注文100件を読み、各注文の明細を個別クエリすると101クエリになります。
 
 ```text
-1 query: orders
-100 queries: items per order
-= 101 round trips
+1クエリ: 注文
+100クエリ: 注文ごとの明細
+= 101往復
 ```
 
 問題：
 
-- Network round trip
-- Pool占有
-- Repeated parse/plan
-- Snapshot間の不整合
+- ネットワーク往復通信
+- プール占有
+- 解析／計画の繰り返し
+- スナップショット間の不整合
 - DB QPS増幅
 
 対策：
 
-- JOIN
-- Batch WHERE order_id IN (...)
-- ORM eager loading
-- DataLoader/request-scoped batching
-- Precomputed aggregate
+- 結合
+- 一括WHERE order_id IN (...)
+- ORM即時読み込み
+- DataLoader/リクエスト単位の一括処理
+- 事前計算済み集約
 
-巨大JOINでparent rowを重複させるcostもあるため、2 query batchが適切な場合があります。
+巨大結合で親行を重複させるコストもあるため、2クエリ一括が適切な場合があります。
 
-## pagination
+## ページ送り
 
-### OFFSET pagination
+### オフセットページ送り
 
 ```sql
 SELECT id, ordered_at
@@ -222,11 +222,11 @@ ORDER BY ordered_at DESC, id DESC
 LIMIT 50 OFFSET 500000;
 ```
 
-DBはoffset分を読み捨てる必要があり、深いpageほどcostが増えます。並行insert/deleteでrowが重複・欠落することもあります。
+DBはオフセット分を読み捨てる必要があり、深いページほどコストが増えます。並行挿入/削除で行が重複・欠落することもあります。
 
-### keyset pagination
+### キーセットページ送り
 
-最後に見たsort keyをcursorにします。
+最後に見たソートキーをカーソルにします。
 
 ```sql
 SELECT id, ordered_at
@@ -236,121 +236,121 @@ ORDER BY ordered_at DESC, id DESC
 LIMIT 50;
 ```
 
-Composite indexと一致すれば、cursor位置から50件だけ読めます。Tie-breakerにunique idを含め、stable total orderを作ります。
+複合インデックスと一致すれば、カーソル位置から50件だけ読めます。同順位の決着用に一意なIDを含め、安定した全順序を作ります。
 
 欠点：
 
-- 任意page番号へjumpしにくい
-- Sort条件ごとにcursor設計
-- Cursor encoding/versioning
+- 任意ページ番号へ移動しにくい
+- ソート条件ごとにカーソル設計
+- カーソル符号化/versioning
 
-## timeoutとcancellation
+## タイムアウトとキャンセル
 
-Clientが諦めてもDB queryが動き続けるとcapacityを消費します。
+クライアントが諦めてもDBクエリが動き続けると容量を消費します。
 
-Deadline propagation：
+期限伝播：
 
 ```text
-HTTP deadline 2.0s
-  pool timeout 0.2s
-  DB statement timeout 1.5s
-  response budget 0.3s
+HTTP期限2.0s
+  接続プールのタイムアウト0.2s
+  DB文のタイムアウト1.5s
+  応答時間予算0.3s
 ```
 
-Query cancellationがserverへ届くか確認します。Transaction中のstatement timeout後、transactionがaborted stateになるdriverもあるためrollbackします。
+クエリキャンセルがサーバーへ届くか確認します。トランザクション中の文のタイムアウト後、トランザクションが中止状態になるドライバーもあるためロールバックします。
 
-## retry
+## 再試行
 
-Retry可能：
+再試行可能：
 
-- Serialization failure
-- Deadlock victim
-- Transient connection loss
-- Leader change
-- Rate limit/overload（Retry-After）
+- 直列化障害
+- デッドロック犠牲対象
+- 一時的な接続断
+- リーダー 変更
+- 流量制限/過負荷（Retry-After）
 
-通常retryしない：
+通常再試行しない：
 
-- Constraint violation
-- Syntax/type error
-- Authentication/authorization
-- Deterministic application error
+- 制約違反
+- 構文/型エラー
+- 認証／認可
+- 決定論的アプリケーションエラー
 
-Exponential backoff + jitter、上限回数、deadlineを使います。Layerごとに3回retryすると3³に増えるretry amplificationを避け、一つのowner layerへ集約します。
+指数バックオフ + ジッター、上限回数、期限を使います。層ごとに3回再試行すると3³に増える再試行増幅を避け、一つの所有者層へ集約します。
 
-Write retryにはidempotency keyが必要です。
+書き込み再試行には冪等性キーが必要です。
 
-## schema migration
+## スキーマ移行
 
-Applicationとschemaを同時に一瞬で切り替えることはできません。Rolling deploymentではold/new applicationが同時に動きます。
+アプリケーションとスキーマを同時に一瞬で切り替えることはできません。ローリング展開では古い/新しいアプリケーションが同時に動きます。
 
-### expand-contract
+### 拡張・縮約方式
 
 例：customers.nameをfirst_name/last_nameへ分ける。
 
-1. **Expand**：new columnsをnullable/defaultなしで追加
-2. New applicationがold/new両方を扱う
-3. Existing rowsをsmall batchでbackfill
-4. Readをnew columnsへ切り替える
-5. Constraint/indexをonlineにvalidate
-6. Old writeを停止
-7. **Contract**：old columnを後のreleaseで削除
+1. **拡張**：新しい列をNULL許容/既定値なしで追加
+2. 新しいアプリケーションが古い/新しい両方を扱う
+3. 既存行を小規模一括で既存データの補完
+4. 読み取りを新しい列へ切り替える
+5. 制約/インデックスをオンラインに検証
+6. 古い書き込みを停止
+7. **契約**：古い列を後のリリースで削除
 
 ```mermaid
 flowchart LR
-    E["Expand"] --> D["Dual-compatible deploy"]
-    D --> B["Backfill"]
-    B --> V["Validate"]
-    V --> C["Contract"]
+    E["拡張"] --> D["両方式互換の展開"]
+    D --> B["既存データの補完"]
+    B --> V["検証"]
+    V --> C["契約"]
 ```
 
-Migrationとapplication rollbackの両方が可能なcompatibility windowを作ります。
+移行とアプリケーションロールバックの両方が可能な互換期間を作ります。
 
-### table rewrite
+### 表書き換え
 
-Column default/type変更がtable全体rewriteやlong lockを起こすかはDB version/operationによります。
+列既定値/型変更が表全体書き換えや長時間ロックを起こすかはDBバージョン/操作によります。
 
-Production前に：
+本番環境前に：
 
-- Lock level
-- Rewrite有無
-- WAL/replication量
-- Disk headroom
-- Duration
-- Cancel/rollback方法
+- ロックの強さ
+- 書き換え有無
+- WAL/レプリケーション量
+- ディスク余力
+- 所要時間
+- キャンセル/ロールバック方法
 
-を同等data量で検証します。
+を同等データ量で検証します。
 
-## online index creation
+## オンラインインデックス作成
 
-通常のindex buildがwriteをblockする場合、concurrent/online optionを使います。
+通常のインデックス構築が書き込みを停止する場合、並行する/オンライン機能を使います。
 
-Online buildでも：
+オンライン構築でも：
 
 - CPU/I/O
 - WAL
-- Replica lag
-- Temporary disk
-- Invalid/failed index cleanup
-- Long transaction待ち
+- レプリカ遅延
+- 一時的なディスク
+- 無効/失敗インデックス後始末
+- 長時間トランザクション待ち
 
-が発生します。Peak外にrate limitし、progressを監視します。
+が発生します。ピーク外に流量制限し、進捗を監視します。
 
-Index追加前後にquery planとwrite latencyを比較します。
+インデックス追加前後にクエリ計画と書き込み遅延時間を比較します。
 
-## backfill
+## 既存データの補完
 
-一括UPDATEはlarge transaction、WAL burst、lock、bloat、replica lagを起こします。
+一括UPDATEは大規模トランザクション、WALの急増、ロック、肥大化、レプリカ遅延を起こします。
 
-安全なbackfill：
+安全な既存データの補完：
 
-- Primary key rangeでsmall batch
-- Commit between batches
-- Rate limit
-- Resume checkpoint
-- Idempotent update condition
-- Metrics
-- Replica lagでthrottle
+- 主キー 範囲で小規模一括
+- コミット各一括処理の間
+- 流量制限
+- 再開チェックポイント
+- 冪等な更新条件
+- 指標
+- レプリカ遅延で速度制限
 
 ```sql
 UPDATE orders
@@ -360,225 +360,225 @@ WHERE id > $last_id
   AND normalized_status IS NULL;
 ```
 
-Completion後にNULL残数、checksum/sample、constraint validationで確認します。
+完了後にNULL残数、チェックサム/標本、制約検証で確認します。
 
-## observability
+## 可観測性
 
 ### REDとUSE
 
-Application側：
+アプリケーション側：
 
-- Rate
-- Errors
-- Duration
+- 率
+- エラー数
+- 所要時間
 
-Resource側：
+資源側：
 
-- Utilization
-- Saturation
-- Errors
+- 使用率
+- 飽和
+- エラー数
 
 DBへ対応づけます。
 
-| Symptom | 確認候補 |
+| 症状 | 確認候補 |
 | --- | --- |
-| API latency上昇 | pool wait、query time、lock wait、I/O |
-| DB CPU高騰 | QPS、plan change、full scan、expression |
-| I/O saturation | cache miss、scan、checkpoint、compaction |
-| Connection枯渇 | leak、long transaction、slow query |
-| Replica lag | write burst、network、apply、long query |
-| Disk増加 | bloat、WAL retention、temp、backup |
+| API遅延時間上昇 | 接続プール待ち、クエリ時間、ロック待機、I/O |
+| DB CPU高騰 | QPS、計画変更、全件走査、式 |
+| I/O飽和 | キャッシュミス、走査、チェックポイント、コンパクション |
+| 接続枯渇 | 接続漏れ、長時間トランザクション、低速クエリ |
+| レプリカ遅延 | 書き込みの急増、ネットワーク、適用、長時間クエリ |
+| ディスク増加 | 肥大化、WAL保持期間、一時ファイル、バックアップ |
 
-## slow query log
+## 低速クエリログ
 
 記録したいもの：
 
-- Normalized query/fingerprint
-- Duration
-- Rows
-- Parametersの安全なsample
-- Database/user/application
-- Wait event
-- Trace/request ID
-- Plan ID/hash
+- 正規化済みクエリ／指紋
+- 所要時間
+- 行
+- パラメーターの安全な標本
+- データベース/利用者/アプリケーション
+- 待機イベント
+- トレース/リクエストID
+- 計画ID/ハッシュ
 
-Sensitive dataをlogへ出さないmaskingが必要です。
+機密データをログへ出さないマスキングが必要です。
 
-Average latencyだけでなくp95/p99とtotal timeを見ると、「非常に遅い少数query」と「少し遅い大量query」を区別できます。
+平均遅延時間だけでなくp95/p99と合計時間を見ると、「非常に遅い少数クエリ」と「少し遅い大量クエリ」を区別できます。
 
 ```text
-total DB time
-= calls × average duration
+合計DB時間
+= 呼び出し回数 × 平均所要時間
 ```
 
-## wait analysis
+## 待機分析
 
-Queryが遅いとき、CPUで実行中か何を待っているか分けます。
+クエリが遅いとき、CPUで実行中か何を待っているか分けます。
 
-- Lock
-- Storage read/write
-- WAL flush
-- Network/client
-- Buffer pin/latch
-- Parallel worker
-- Replica apply
+- ロック
+- ストレージ読み取り/書き込み
+- WAL書き出し
+- ネットワーク/クライアント
+- バッファ固定/ラッチ
+- 並列ワーカー
+- レプリカ適用
 
-Wait eventとblocker graphをtraceへ結び、症状ではなくbottleneckを特定します。
+待機イベントとブロッカーグラフをトレースへ結び、症状ではなくボトルネックを特定します。
 
-## plan regression
+## 計画の性能退行
 
-同じqueryが急に遅くなる原因：
+同じクエリが急に遅くなる原因：
 
-- Statistics更新
-- Data distribution変化
-- Parameter差
-- Index追加/削除
-- DB upgrade
-- Memory/cache state
-- Schema/type変更
+- 統計情報更新
+- データ分布変化
+- パラメーター差
+- インデックス追加/削除
+- DB更新
+- メモリ/キャッシュ状態
+- スキーマ/型変更
 
-Query fingerprintごとのplan history、latency、rowsを保存すると比較できます。Emergency hintで戻す場合も、根本のstatistics/dataを調べます。
+クエリ指紋ごとの計画履歴、遅延時間、行を保存すると比較できます。緊急時ヒントで戻す場合も、根本の統計情報/データを調べます。
 
-## vacuumとstatistics
+## 不要版の回収と統計情報
 
-MVCC DBではvacuumがold versionを回収し、statisticsがoptimizerを支えます。
+MVCC DBでは不要版の回収が古いバージョンを回収し、統計情報が最適化器を支えます。
 
 監視：
 
-- Dead tuples/history length
-- Last vacuum/analyze
-- Long transaction
-- Transaction ID age
-- Table/index bloat
-- Auto maintenance worker saturation
+- 不要タプル/履歴長
+- 最後の不要版の回収/解析
+- 長時間トランザクション
+- トランザクションID経過時間
+- 表/インデックス肥大化
+- 自動保守ワーカーの飽和
 
-Maintenanceを「暇な時間だけの仕事」と考えると、write-heavy tableで追いつかずforeground latencyへ跳ね返ります。
+保守を「暇な時間だけの仕事」と考えると、書き込み中心の表で追いつかず利用者向け処理遅延時間へ跳ね返ります。
 
-## backupとrestore drill
+## バックアップと復元訓練
 
-Backup success logは復旧証明ではありません。
+バックアップ成功ログは復旧証明ではありません。
 
-Restore drill：
+復元訓練：
 
-1. Isolated environmentへrestore
-2. WAL/PITRをtargetまでapply
-3. Application-level consistency check
-4. Row/sample/checksum検証
+1. 隔離環境へ復元
+2. WAL/PITRを対象まで適用
+3. アプリケーション層の整合性検査
+4. 行/標本/チェックサム検証
 5. 接続・起動手順
 6. 実測RTO
-7. 欠損WAL/credential/permission確認
-8. Runbook更新
+7. 欠損WAL/認証情報/権限確認
+8. 運用手順書更新
 
-Encryption key、secret、extension、external object storageも復元範囲に含めます。
+暗号鍵、シークレット、拡張機能、外部オブジェクトストレージも復元範囲に含めます。
 
-## failoverとswitchover
+## フェイルオーバーと計画切り替え
 
-- **Failover**：unexpected failureでstandbyへ切替
-- **Switchover**：planned maintenanceでroleを安全に交換
+- **フェイルオーバー**：予期しない障害で待機系へ切替
+- **計画切り替え**：計画済み保守でロールを安全に交換
 
 確認項目：
 
-- Candidate freshness
-- Data loss/RPO
-- Fencing old primary
-- DNS/proxy/client cache
-- Connection retry
-- Read-only/write mode
-- Sequence/identity
-- Background jobs
-- Monitoring alert reset
+- 切り替え候補の鮮度
+- データ損失/RPO
+- フェンシング古い主系
+- DNS/プロキシ/クライアントキャッシュ
+- 接続再試行
+- 読み取り専用/書き込み方式
+- 連番/自動採番
+- バックグラウンドジョブ
+- 監視警告の解除
 
-Failover testは「new primaryが起動した」だけでなくapplication write/read、old primary復帰、failbackまで行います。
+フェイルオーバー試験は「新しい主系が起動した」だけでなくアプリケーション書き込み/読み取り、古い主系復帰、切り戻しまで行います。
 
-## security
+## セキュリティ
 
-### least privilege
+### 最小権限
 
-Application roleへ必要なtable/operationだけを許可します。Migration role、read-only analytics、backup roleを分離します。
+アプリケーションロールへ必要な表/操作だけを許可します。移行ロール、読み取り専用分析処理、バックアップロールを分離します。
 
-### SQL injection
+### SQLインジェクション
 
-Valueはbind parameter、dynamic identifierはallowlist。String連結でSQLを作らない。
+値はバインドパラメーター、動的な識別子は許可リスト。文字列連結でSQLを作らない。
 
-### encryption
+### 暗号化
 
-- TLS in transit
-- Storage/backup encryption at rest
-- Column/application-level encryption for sensitive data
-- Key rotationとrecovery
+- TLS通信時
+- ストレージ/バックアップ保存時暗号化
+- 列／アプリケーション層の機密データの暗号化
+- 鍵のローテーションと復旧
 
-Encryptionはaccess controlやSQL injection対策の代替ではありません。
+暗号化はアクセス制御やSQLインジェクション対策の代替ではありません。
 
-### secret管理
+### シークレット管理
 
-Credentialをsource code/log/imageへ入れず、secret managerと短命credentialを使います。Rotation時にpool connectionを更新できるようにします。
+認証情報をソースコード／ログ／イメージへ入れず、シークレット管理機構と短命認証情報を使います。ローテーション時にプール接続を更新できるようにします。
 
-### audit
+### 監査
 
-誰が、いつ、どのdataへ、どのoperationをしたかを記録します。High-volume auditのstorage、tamper resistance、retention、privacyも設計します。
+誰が、いつ、どのデータへ、どの操作をしたかを記録します。大量の監査のストレージ、改ざん耐性、保持期間、プライバシーも設計します。
 
-## capacity planning
+## 容量計画
 
-Current averageではなくgrowthとfailure modeを含めます。
+現在の平均ではなく増加傾向と障害形態を含めます。
 
 ```text
-peak load
-× growth factor
-× failover concentration
-× safety margin
+ピーク負荷
+× 増加率
+× フェイルオーバー時の集中係数
+× 安全余裕
 ```
 
-Replica 3台へreadを均等分散している場合、1台停止時は残りのloadが1.5倍です。Maintenance/resharding/backupが重なるheadroomも必要です。
+レプリカ3台へ読み取りを均等分散している場合、1台停止時は残りの負荷が1.5倍です。保守/再シャーディング/バックアップが重なる余力も必要です。
 
-Load testではproductionに近いdata volume、skew、index/cache state、concurrencyを使います。Empty small DBのbenchmarkはplanもI/Oも異なります。
+負荷試験では本番環境に近いデータ量、偏り、インデックス/キャッシュ状態、同時実行性を使います。空の小規模DBのベンチマークは計画もI/Oも異なります。
 
-## incident response
+## インシデント応答
 
-1. User impactとSLOを確認
-2. Change/event timelineを固定
-3. Saturated resourceとwaitを特定
-4. Loadを減らす安全なmitigation
-5. Query/plan/lock/replicaを切り分け
-6. Recovery actionの副作用を評価
-7. Evidenceを保存
-8. Post-incidentで再発防止
+1. 利用者への影響とSLOを確認
+2. 変更/イベント時系列を固定
+3. 飽和した資源と待機を特定
+4. 負荷を減らす安全な緩和策
+5. クエリ/計画/ロック/レプリカを切り分け
+6. 復旧操作の副作用を評価
+7. 証拠を保存
+8. 事後検証で再発防止
 
-「DBを再起動」「connection上限を増やす」は一時的にqueueを消しても原因を隠すことがあります。
+「DBを再起動」「接続上限を増やす」は一時的にキューを消しても原因を隠すことがあります。
 
 ## よくある誤解
 
-### 「DB max_connectionsまでpoolを使う」
+### 「DB max_connectionsまでプールを使う」
 
-Connection上限は安全な実効concurrencyではありません。全application instanceとper-session memoryを考えます。
+接続上限は安全な実効同時実行性ではありません。全アプリケーションインスタンスとセッションごとのメモリを考えます。
 
-### 「zero-downtime migrationはlockを取らない」
+### 「無停止移行はロックを取らない」
 
-短いmetadata lockやvalidation、resource競合は残ります。互換性と停止時間を小さくする設計です。
+短いメタデータロックや検証、資源競合は残ります。互換性と停止時間を小さくする設計です。
 
-### 「backup jobがgreenなら復旧できる」
+### 「バックアップジョブが成功なら復旧できる」
 
-Restore、key、WAL連続性、application検証、実測時間を試して初めて証明できます。
+復元、キー、WAL連続性、アプリケーション検証、実測時間を試して初めて証明できます。
 
 ## まとめ
 
-- Request latencyはpool待ち、network、DB実行、lock/I/O待ちを分けて観測する
-- Poolはconnection再利用だけでなくDB concurrencyへのbackpressureである
-- Transaction内で外部APIやuser inputを待たない
-- N+1はround tripとQPSを増幅し、keyset paginationはdeep OFFSETを避ける
-- Timeoutをend-to-end deadlineへ揃え、retryを一layerへ集約する
-- Expand-contract migrationでold/new applicationの互換期間を作る
-- Backfillとonline indexもWAL、I/O、replica lagを監視する
-- Slow queryはplan、rows、loops、wait、traceを結びつける
-- Backupはrestore drill、failoverはapplication確認とfencingまで試す
-- Least privilege、bind parameter、encryption、auditを層として組み合わせる
+- リクエスト遅延時間はプール待ち、ネットワーク、DB実行、ロック/I/O待ちを分けて観測する
+- プールは接続再利用だけでなくDB同時実行性への逆圧である
+- トランザクション内で外部APIや利用者入力を待たない
+- N+1は往復通信とQPSを増幅し、キーセットページ送りは深いオフセットを避ける
+- タイムアウトを端から端までの期限へ揃え、再試行を一層へ集約する
+- 拡張・縮約方式移行で古い/新しいアプリケーションの互換期間を作る
+- 既存データの補完とオンラインインデックスもWAL、I/O、レプリカ遅延を監視する
+- 低速クエリは計画、行、ループ数、待機、トレースを結びつける
+- バックアップは復元訓練、フェイルオーバーはアプリケーション確認とフェンシングまで試す
+- 最小権限、バインドパラメーター、暗号化、監査を層として組み合わせる
 
 ## 確認問題
 
-1. Application instance数を無視したpool sizingが危険な理由を説明してください。
-2. N+1をJOIN一つにまとめる以外の解決を二つ挙げてください。
-3. Expand-contractでcolumn renameを安全に行うstepを設計してください。
-4. Slow APIをpool wait、lock、I/Oへ切り分ける観測項目を書いてください。
-5. Backup successとrestore可能性が同じでない理由を説明してください。
+1. アプリケーションインスタンス数を無視した接続プールの大きさの決定が危険な理由を説明してください。
+2. N+1を結合一つにまとめる以外の解決を二つ挙げてください。
+3. 拡張・縮約方式で列名前変更を安全に行う手順を設計してください。
+4. 低速APIを接続プール待ち、ロック、I/Oへ切り分ける観測項目を書いてください。
+5. バックアップ成功と復元可能性が同じでない理由を説明してください。
 
 ## 参考資料
 
@@ -587,4 +587,4 @@ Restore、key、WAL連続性、application検証、実測時間を試して初�
 - [PostgreSQL Documentation: Backup and Restore](https://www.postgresql.org/docs/current/backup.html)
 - [OWASP: SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)
 
-最終章では、1件の注文をschema、page、plan、transaction、WAL、replication、sharding、Sagaまで全レイヤーで追跡します。
+最終章では、1件の注文をスキーマ、ページ、計画、トランザクション、WAL、レプリケーション、シャーディング、Sagaまで全レイヤーで追跡します。

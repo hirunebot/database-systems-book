@@ -6,8 +6,8 @@
 
 ## この章で答える問い
 
-- 注文確定のSQLは、commit応答までにどの層を通るのか
-- 同時更新、クラッシュ、replica lag、network partitionが起きると何が変わるのか
+- 注文確定のSQLは、コミット応答までにどの層を通るのか
+- 同時更新、クラッシュ、レプリカ遅延、ネットワーク分断が起きると何が変わるのか
 - 要件が変わったとき、どの設計判断を見直すべきか
 
 ## ケーススタディ
@@ -17,24 +17,24 @@
 1. 単一ノードDBに顧客、注文、在庫を保存する
 2. 注文一覧の遅いクエリを実行計画から改善する
 3. 同時購入による在庫の取り過ぎをトランザクションで防ぐ
-4. commit直後のクラッシュからWALで復旧する
-5. followerを追加し、読み取りとfailoverを設計する
-6. 注文をshardへ分割し、決済サービスと連携する
+4. コミット直後のクラッシュからWALで復旧する
+5. フォロワーを追加し、読み取りとフェイルオーバーを設計する
+6. 注文をシャードへ分割し、決済サービスと連携する
 
 ## 本文へ含める観察点
 
 - スキーマ、制約、ページとインデックスの配置
-- SQL、logical plan、physical plan、cardinality
-- lockまたはMVCCでのversion visibility
-- WAL record、commit、checkpoint、recovery
-- replication log、consensus、read consistency
-- shard routing、2PCまたはSaga、outbox、retry
-- latency、throughput、RPO/RTO、運用上の監視項目
+- SQL、論理計画、物理計画、行数
+- ロックまたはMVCCでのバージョン可視性
+- WALレコード、コミット、チェックポイント、復旧
+- レプリケーションログ、合意、読み取り整合性
+- シャード振り分け、2PCまたはSaga、アウトボックス、再試行
+- 遅延時間、処理量、RPO/RTO、運用上の監視項目
 
 ## 成果物
 
-- end-to-endのシーケンス図
-- 要件と設計判断を対応づけたdecision table
+- 端から端までのシーケンス図
+- 要件と設計判断を対応づけた決定表
 - 複数の障害注入シナリオと期待結果
 - 単一ノード版から分散版までの設計変更履歴
 

@@ -1,245 +1,245 @@
 ---
 title: 09. コストベース最適化
-description: statistics、selectivity、cardinality、cost model、join orderから、optimizerの判断と誤りを診断する。
+description: 統計情報、選択率、行数、コストモデル、結合順序から、最適化器の判断と誤りを診断する。
 sidebar:
   order: 9
   label: 09. コストベース最適化
 ---
 
-Optimizerは実際に全候補planを実行して最速を選ぶわけではありません。Statisticsから各operatorのrow数を推定し、I/O、CPU、memory、networkをcostへ換算して比較します。
+最適化器は実際に全候補計画を実行して最速を選ぶわけではありません。統計情報から各演算子の行数を推定し、I/O、CPU、メモリ、ネットワークをコストへ換算して比較します。
 
-推定に基づく以上、optimizerは間違えることがあります。重要なのはhintで結論を強制する前に、どの推定がなぜ外れ、後続の判断へどう伝播したかを見つけることです。
+推定に基づく以上、最適化器は間違えることがあります。重要なのはヒントで結論を強制する前に、どの推定がなぜ外れ、後続の判断へどう伝播したかを見つけることです。
 
 ## この章で答える問い
 
-- Cost-based optimizerはどの候補を、何のcostで比較するのか
-- Selectivityとcardinalityはどう推定されるのか
-- Histogram、NDV、most common valuesは何を表すのか
-- Column間相関やdata skewで推定が外れるのはなぜか
-- EXPLAIN ANALYZEから最初の誤推定をどう見つけるのか
+- コストベース最適化器はどの候補を、何のコストで比較するのか
+- 選択率と行数はどう推定されるのか
+- ヒストグラム、NDV、最頻値は何を表すのか
+- 列間相関やデータ偏りで推定が外れるのはなぜか
+- EXPLAIN解析から最初の誤推定をどう見つけるのか
 
-## rule-basedとcost-based
+## 規則ベースとコストベース
 
-Rule-based optimizationは、「predicateをscan近くへ移す」「不要columnを除く」などの規則でplanを変形します。
+規則ベース最適化は、「述語を走査近くへ移す」「不要列を除く」などの規則で計画を変形します。
 
-Cost-based optimizationは、複数の合法な候補から推定costが最小のものを選びます。
+コストベース最適化は、複数の合法な候補から推定コストが最小のものを選びます。
 
 ```mermaid
 flowchart TB
-    L["Logical plan"] --> A["Seq scan + hash join"]
-    L --> B["Index scan + nested loop"]
-    L --> C["Index scan + merge join"]
-    A --> Cost["Estimate cost"]
+    L["論理計画"] --> A["順次走査 + ハッシュ結合"]
+    L --> B["インデックス走査 + 入れ子ループ"]
+    L --> C["インデックス走査 + マージ結合"]
+    A --> Cost["推定コスト"]
     B --> Cost
     C --> Cost
-    Cost --> Best["Lowest estimated cost"]
+    Cost --> Best["最小推定コスト"]
 ```
 
-「indexを使える」という事実は候補を増やすだけです。Index planのcostがtable scanより高いと推定すれば使いません。
+「インデックスを使える」という事実は候補を増やすだけです。インデックス計画のコストが表走査より高いと推定すれば使いません。
 
-## statistics
+## 統計情報
 
-Optimizerはtableを毎回全scanして分布を調べるわけにはいきません。Catalogへ保存したstatisticsを使います。
+最適化器は表を毎回全走査して分布を調べるわけにはいきません。カタログへ保存した統計情報を使います。
 
 代表的な情報：
 
-- total row/page count
-- NULL fraction
-- number of distinct values（NDV）
-- most common values（MCV）とfrequency
-- histogram
-- average column width
-- physical orderとのcorrelation
-- multi-column dependencyやjoint statistics
+- 合計行/ページ件数
+- NULLの割合
+- 異なる値の数（NDV）
+- 最頻値（MCV）と頻度
+- ヒストグラム
+- 平均列幅
+- 物理注文との相関
+- 複数列依存関係や共同統計情報
 
-Statisticsはsampleから作る場合があり、正確な全dataではありません。Data更新後に古くなることもあります。
+統計情報は標本から作る場合があり、正確な全データではありません。データ更新後に古くなることもあります。
 
-## selectivityとcardinality
+## 選択率と行数
 
-Selectivityはpredicateを通る割合、cardinalityはoperatorが出力するrow数です。
+選択率は述語を通る割合、行数は演算子が出力する行数です。
 
 ```text
-estimated cardinality
-= input rows × selectivity
+推定行数
+= 入力行 × 選択率
 ```
 
-1,000,000 rowのtableでselectivity 0.01なら、10,000 rowと推定します。
+1,000,000行の表で選択率0.01なら、10,000行と推定します。
 
-### equality
+### 等値
 
 値が均等分布し、NDVが100なら、単純には次のように推定できます。
 
 ```text
-selectivity(column = value) ≈ 1 / NDV
+選択率(列 = 値) ≈ 1 / NDV
 = 1 / 100
 = 0.01
 ```
 
-しかしstatusのようなcolumnは均等ではありません。
+しかし状態のような列は均等ではありません。
 
 ```text
-confirmed  94%
-pending     1%
-cancelled   5%
+確定済み94%
+保留中1%
+取消済み5%
 ```
 
-MCV statisticsがあれば、pending = 1%を直接使えます。
+MCV統計情報があれば、保留中 = 1%を直接使えます。
 
-### range
+### 範囲
 
-Histogramは値域をbucketへ分け、range predicateがどの割合を含むか推定します。
+ヒストグラムは値域をバケットへ分け、範囲述語がどの割合を含むか推定します。
 
 ```text
-price histogram boundaries:
+価格ヒストグラム境界:
 0 | 1000 | 2000 | 5000 | 10000
 ```
 
-price BETWEEN 1000 AND 2000なら、該当bucketのfrequencyから推定します。Bucket内部で均等という仮定が入るため、狭いspikeや急な偏りは外れます。
+価格BETWEEN 1000 AND 2000なら、該当バケットの頻度から推定します。バケット内部で均等という仮定が入るため、狭い急増や急な偏りは外れます。
 
-## histogram
+## ヒストグラム
 
-### equi-width
+### 等幅
 
-値域を同じ幅へ分けます。分布が偏ると、一つのbucketに大量rowが集中します。
+値域を同じ幅へ分けます。分布が偏ると、一つのバケットに大量行が集中します。
 
-### equi-depth
+### 等頻度
 
-各bucketのrow数が概ね同じになるよう境界を選びます。Skewを表現しやすい一方、bucket内部の分布は近似です。
+各バケットの行数が概ね同じになるよう境界を選びます。偏りを表現しやすい一方、バケット内部の分布は近似です。
 
-### most common values
+### 最頻値
 
-頻出値をhistogramから分離して正確に近いfrequencyを持ちます。残りの値へuniform assumptionを適用します。
+頻出値をヒストグラムから分離して正確に近い頻度を持ちます。残りの値へ一様仮定を適用します。
 
-Statistics targetを上げるとbucketやMCVを増やせますが、analyze timeとcatalog sizeが増えます。
+統計情報対象を上げるとバケットやMCVを増やせますが、解析時間とカタログ大きさが増えます。
 
-## independence assumption
+## 独立性の仮定
 
-複数predicateのselectivityを掛け合わせるとき、columnが独立していると仮定する場合があります。
+複数述語の選択率を掛け合わせるとき、列が独立していると仮定する場合があります。
 
 ```sql
 WHERE country = 'JP'
   AND prefecture = 'Tokyo'
 ```
 
-仮にcountry='JP'が10%、prefecture='Tokyo'が1%なら、独立仮定では0.1%です。
+仮に国='JP'が10%、都道府県='Tokyo'が1%なら、独立仮定では0.1%です。
 
 ```text
 0.10 × 0.01 = 0.001
 ```
 
-しかしTokyoならcountryはほぼJPであり、強い相関があります。実際は1%近いかもしれません。10倍の誤差がjoin順やalgorithmへ影響します。
+しかしTokyoなら国はほぼJPであり、強い相関があります。実際は1%近いかもしれません。10倍の誤差が結合順やアルゴリズムへ影響します。
 
-Extended/multi-column statisticsでdependency、joint NDV、MCVを持てる製品があります。
+Extended/複数列統計情報で依存関係、共同NDV、MCVを持てる製品があります。
 
-## join cardinality
+## 結合行数
 
-Equality joinの単純な推定例です。
+等値結合の単純な推定例です。
 
 ```text
 |A ⋈ B|
 ≈ |A| × |B| / max(NDV(A.key), NDV(B.key))
 ```
 
-これはkeyが均等分布し、value rangeが重なるという仮定です。
+これはキーが均等分布し、値範囲が重なるという仮定です。
 
-Foreign keyからprimary keyへのjoinなら、参照整合性を利用して「参照元rowにつき高々1 match」と推定できる可能性があります。
+外部キーから主キーへの結合なら、参照整合性を利用して「参照元行につき高々1一致」と推定できる可能性があります。
 
 推定を難しくする要因：
 
-- hot key
+- 高負荷キー
 - NULL
-- referential integrityがない
-- key rangeが部分的にしか重ならない
-- multi-column join
-- filter後の分布変化
-- correlated predicates
+- 参照整合性がない
+- キー 範囲が部分的にしか重ならない
+- 複数列結合
+- 絞り込み後の分布変化
+- 相関する述語
 
 ## 誤差の伝播
 
-各operatorの推定誤差は上へ伝わります。
+各演算子の推定誤差は上へ伝わります。
 
 ```mermaid
 flowchart TB
-    S["Scan estimate: 100<br/>actual: 100,000"]
-    J["Nested Loop<br/>inner lookup × rows"]
-    A["Aggregate<br/>memory underestimated"]
+    S["走査推定: 100<br/>実測: 100,000"]
+    J["入れ子ループ<br/>内側参照 × 行"]
+    A["集約<br/>メモリ過小推定"]
     S --> J
     J --> A
 ```
 
-100 rowと思ってindex nested loopを選んだのに、実際は100,000 rowならinner lookupが1,000倍になります。Aggregateのgroup数も過小推定すればmemoryを超えてspillします。
+100行と思ってインデックス入れ子ループを選んだのに、実際は100,000行なら内側参照が1,000倍になります。集約のグループ数も過小推定すればメモリを超えてディスク退避します。
 
-最上位の「10秒かかったoperator」だけを見るのではなく、leafから上へ推定と実数が最初に大きくずれた場所を探します。
+最上位の「10秒かかった演算子」だけを見るのではなく、葉から上へ推定と実数が最初に大きくずれた場所を探します。
 
-## cost model
+## コストモデル
 
-Costは通常、wall-clock timeそのものではなく比較用の抽象単位です。
+コストは通常、実時間そのものではなく比較用の抽象単位です。
 
 概念的には次を組み合わせます。
 
 ```text
-total cost
-= page I/O cost
-+ CPU per tuple/operator
-+ memory/spill cost
-+ parallel setup/coordination
-+ network transfer
+合計コスト
+= ページI/Oコスト
++ タプル／演算子当たりのCPUコスト
++ メモリ/ディスク退避コスト
++ 並列設定／調整コスト
++ ネットワーク転送
 ```
 
-### I/O cost
+### I/Oコスト
 
-- sequential page read
-- random page read
-- cache hit probability
-- temporary read/write
+- 順次ページ読み取り
+- ランダムページ読み取り
+- キャッシュヒット率
+- 一時的な読み取り/書き込み
 
-SSD、remote storage、large memory環境ではdefault cost ratioがhardwareと合わない場合があります。ただしparameter調整の前にstatisticsとquery自体を確認します。
+SSD、リモートストレージ、大規模メモリ環境では既定値コスト比率がハードウェアと合わない場合があります。ただしパラメーター調整の前に統計情報とクエリ自体を確認します。
 
-### CPU cost
+### CPUコスト
 
-- row processing
-- expression evaluation
-- function call
-- comparison/hash
-- decompression
+- 行処理
+- 式の評価
+- 関数呼び出し
+- 比較／ハッシュ
+- 伸長
 
-UDFやcomplex JSON expressionは、単純column比較と同じcostではありません。Cost modelがcustom functionを過小評価する場合があります。
+UDFや複雑なJSON式は、単純列比較と同じコストではありません。コストモデルがカスタム関数を過小評価する場合があります。
 
-### startupとtotal cost
+### 起動と合計コスト
 
-Planには最初のrowを返すまでのstartup costと、全rowを返すtotal costがあります。
+計画には最初の行を返すまでの起動コストと、全行を返す合計コストがあります。
 
-LIMIT 1ではstartupが小さいnested loopが、全件処理ではhash joinが有利ということがあります。
+上限1では起動が小さい入れ子ループが、全件処理ではハッシュ結合が有利ということがあります。
 
-## access path selection
+## アクセス経路選択
 
-Table scanとindex scanを比較します。
+表走査とインデックス走査を比較します。
 
-### index scanの概算
+### インデックス走査の概算
 
 ```text
-B+tree traversal
-+ matching leaf pages
-+ table page fetches
-+ visibility/filter CPU
+B+木走査
++ 一致葉ページ
++ 表ページ取得
++ 可視性/絞り込みCPU
 ```
 
-### table scanの概算
+### 表走査の概算
 
 ```text
-all table pages sequentially
-+ predicate CPU for all tuples
+全表ページを順次走査
++ 全タプルに対する述語評価のCPUコスト
 ```
 
-Matching rowが増えたり、table pagesが散らばったりするとindex costが増えます。Covering indexやphysical correlationが高ければ減ります。
+一致行が増えたり、表ページが散らばったりするとインデックスコストが増えます。カバリングインデックスや物理相関が高ければ減ります。
 
-## join order search
+## 結合順序探索
 
-N tableのjoin順候補は急速に増えます。全候補をenumerateするのは大きなNで困難です。
+N表の結合順候補は急速に増えます。全候補を列挙するのは大きなNで困難です。
 
-### dynamic programming
+### 動的計画法
 
-小さなtable集合のbest planを保存し、それを組み合わせます。
+小さな表集合の最良計画を保存し、それを組み合わせます。
 
 ```text
 best({A,B})
@@ -249,20 +249,20 @@ best({B,C})
 best({A,B,C})
 ```
 
-比較的少数tableで高品質なplanを探せますが、search spaceが指数的に増えます。
+比較的少数表で高品質な計画を探せますが、探索空間が指数的に増えます。
 
-### pruningとheuristics
+### 刈り込みとヒューリスティクス
 
-- costが既知bestより高いpartial planを捨てる
-- connected join graphを優先する
-- bushy planを制限する
-- table数が多ければgenetic/random searchへ切り替える
+- コストが既知の最良コストより高い部分的計画を捨てる
+- 連結した結合グラフを優先する
+- ブッシー計画を制限する
+- 表数が多ければ遺伝的／ランダム探索へ切り替える
 
-Optimizer time自体もquery latencyなので、探索品質とのtrade-offがあります。
+最適化に要する時間自体もクエリ遅延に含まれるため、探索品質とのトレードオフがあります。
 
-## prepared statementとparameter
+## プリペアド文とパラメーター
 
-Prepared statementはparse/plan cost削減やsecurityに役立ちますが、parameter値によって最適planが異なる場合があります。
+プリペアド文は解析/計画コスト削減やセキュリティに役立ちますが、パラメーター値によって最適計画が異なる場合があります。
 
 ```sql
 SELECT *
@@ -270,109 +270,109 @@ FROM orders
 WHERE customer_id = $1;
 ```
 
-通常customerは10 orders、最大customerは1000万orders持つとします。
+通常顧客は10件の注文、最大顧客は1,000万件の注文持つとします。
 
-- 通常値：index scan + nested loopが有利
-- hot value：table/bitmap scan + hash processingが有利かもしれない
+- 通常値：インデックス走査 + 入れ子ループが有利
+- 高負荷値：表/ビットマップ走査 + ハッシュ処理が有利かもしれない
 
-Parameter値ごとにcustom planを作るか、平均的generic planを再利用するかはcompile costとのtrade-offです。Parameter sniffing、parameter-sensitive plan、generic/custom planなど製品ごとの仕組みがあります。
+パラメーター値ごとにカスタム計画を作るか、平均的汎用計画を再利用するかはコンパイルコストとのトレードオフです。パラメータースニッフィング、パラメーター依存計画、汎用/カスタム計画など製品ごとの仕組みがあります。
 
-## statisticsが古い場合
+## 統計情報が古い場合
 
-Bulk load直後、急成長table、値分布が時間で変わるcolumnではstatisticsが実態とずれます。
+一括投入の直後、急成長表、値分布が時間で変わる列では統計情報が実態とずれます。
 
 対処の順序：
 
-1. Statistics更新時刻とsampleを確認する
-2. ANALYZE相当を実行する
-3. Auto analyze thresholdがworkloadに合うか確認する
-4. Skew/correlationならstatistics targetやextended statisticsを検討する
-5. Query predicateやdata modelを見直す
+1. 統計情報更新時刻と標本を確認する
+2. 解析相当を実行する
+3. 自動解析のしきい値が処理負荷に合うか確認する
+4. 偏り/相関なら統計情報対象や拡張統計情報を検討する
+5. クエリ述語やデータモデルを見直す
 
-Statistics更新だけで一時的に直っても、なぜ古くなったかを運用へ反映します。
+統計情報更新だけで一時的に直っても、なぜ古くなったかを運用へ反映します。
 
-## EXPLAINとEXPLAIN ANALYZE
+## EXPLAINとEXPLAIN解析
 
 ### EXPLAIN
 
-推定planを表示します。Queryを実行しないため安全に見られますが、実row/timeは分かりません。
+推定計画を表示します。クエリを実行しないため安全に見られますが、実行/時間は分かりません。
 
-### EXPLAIN ANALYZE
+### EXPLAIN解析
 
-Queryを実行し、実row、loops、timeなどを表示します。UPDATE/DELETEへ使うと実際に変更するため、transaction rollbackやstaging環境など安全策が必要です。
+クエリを実行し、実測行数、ループ数、時間などを表示します。UPDATE/削除へ使うと実際に変更するため、トランザクションロールバックや検証環境など安全策が必要です。
 
 見る順序：
 
-1. Estimated rowsとactual rows
-2. Loopsを掛けた総row
-3. Filterで捨てたrow
-4. Scan method
-5. Join build/outer side
-6. Sort/hash spill
-7. Buffer/page I/O
-8. Planning timeとexecution time
+1. 推定行数と実行時行数
+2. ループ数を掛けた総行
+3. 絞り込みで捨てた行
+4. 走査方式
+5. 結合の構築側／外側
+6. ソート/ハッシュディスク退避
+7. バッファ/ページI/O
+8. 計画時間と実行時間
 
 ### 最初の誤推定を探す例
 
 ```text
-Index Scan orders
-  estimated rows=10
-  actual rows=500,000
+ordersのインデックスを走査
+  推定行数=10
+  実行時行数=500,000
 
-Nested Loop
-  inner loops=500,000
+入れ子ループ
+  内側ループ数=500,000
 ```
 
-Nested Loop自体を原因と呼ぶ前に、ordersの50000倍の誤推定を調べます。原因はhot customer、古いstatistics、castされたpredicate、correlationなどかもしれません。
+入れ子ループ自体を原因と呼ぶ前に、ordersの50000倍の誤推定を調べます。原因は高負荷顧客、古い統計情報、型変換された述語、相関などかもしれません。
 
-## hintを使う前に
+## ヒントを使う前に
 
-Hintはplanを制御する有効な手段になる場合がありますが、data量やversionが変わっても固定判断が残ります。
+ヒントは計画を制御する有効な手段になる場合がありますが、データ量やバージョンが変わっても固定判断が残ります。
 
 先に確認するもの：
 
-- Statistics
-- Data distribution
-- Predicateのsargability
-- Index設計
-- Type mismatch
-- Configuration/hardware cost
-- Query rewrite
+- 統計情報
+- データ分布
+- 述語のインデックス検索可能性
+- インデックス設計
+- 型の不一致
+- 構成/ハードウェアコスト
+- クエリ書き換え
 
-Hintを使うなら、なぜcost modelが誤るか、どの条件でhintが無効になるか、監視方法を記録します。
+ヒントを使うなら、なぜコストモデルが誤るか、どの条件でヒントが無効になるか、監視方法を記録します。
 
 ## よくある誤解
 
-### 「actual timeが最大のnodeが根本原因」
+### 「実行時間が最大のノードが根本原因」
 
-上流の誤推定や過剰rowが、後続nodeの仕事を増やしていることがあります。最初の増幅点を探します。
+上流の誤推定や過剰行が、後続ノードの仕事を増やしていることがあります。最初の増幅点を探します。
 
-### 「estimated costはmilliseconds」
+### 「推定コストはミリ秒」
 
-多くのDBでは相対比較の抽象単位です。異なるquery間の実時間をcost値だけで直接比較しません。
+多くのDBでは相対比較の抽象単位です。異なるクエリ間の実時間をコスト値だけで直接比較しません。
 
-### 「statisticsを増やせば常にplanが改善する」
+### 「統計情報を増やせば常に計画が改善する」
 
-Analyze costとcatalog sizeが増え、そもそも表現できない相関もあります。問題columnへ焦点を当てます。
+解析コストとカタログ大きさが増え、そもそも表現できない相関もあります。問題列へ焦点を当てます。
 
 ## まとめ
 
-- Optimizerはstatisticsからcardinalityとcostを推定してphysical planを選ぶ
-- NDV、MCV、histogramはequalityとrange selectivityを近似する
-- Independence、uniformity、containmentの仮定がskewやcorrelationで外れる
-- Cardinality誤差はjoin loops、memory、spillへ増幅される
-- Cost modelはI/O、CPU、memory、parallel、networkを抽象単位で比較する
-- Join order探索は品質とplanning timeのtrade-offを持つ
-- EXPLAIN ANALYZEではleafから最初の大きな推定差を探す
-- Hintの前にstatistics、data、predicate、index、型を確認する
+- 最適化器は統計情報から行数とコストを推定して物理計画を選ぶ
+- NDV、MCV、ヒストグラムは等値と範囲選択率を近似する
+- 独立性、一様性、包含関係の仮定が偏りや相関で外れる
+- 行数誤差は結合ループ数、メモリ、ディスク退避へ増幅される
+- コストモデルはI/O、CPU、メモリ、並列、ネットワークを抽象単位で比較する
+- 結合順序探索は品質と計画時間のトレードオフを持つ
+- EXPLAIN解析では葉から最初の大きな推定差を探す
+- ヒントの前に統計情報、データ、述語、インデックス、型を確認する
 
 ## 確認問題
 
-1. NDV=1000の均等columnでequality predicateのselectivityを概算してください。
-2. countryとprefectureのindependence assumptionが外れる理由を説明してください。
-3. 100 rowと推定したouterが実際10万rowだった場合、nested loopへどう影響しますか。
-4. Startup costとtotal costで異なるplanが選ばれるquery例を作ってください。
-5. EXPLAIN ANALYZEで最初のcardinality誤差を探す手順を説明してください。
+1. NDV=1000の均等列で等値述語の選択率を概算してください。
+2. 国と都道府県の独立性の仮定が外れる理由を説明してください。
+3. 100行と推定した外側が実際10万行だった場合、入れ子ループへどう影響しますか。
+4. 起動コストと合計コストで異なる計画が選ばれるクエリ例を作ってください。
+5. EXPLAIN解析で最初の行数誤差を探す手順を説明してください。
 
 ## 参考資料
 
@@ -381,4 +381,4 @@ Analyze costとcatalog sizeが増え、そもそも表現できない相関も�
 - [PostgreSQL Documentation: Controlling the Planner with Explicit JOIN Clauses](https://www.postgresql.org/docs/current/explicit-joins.html)
 - [Surajit Chaudhuri, “An Overview of Query Optimization in Relational Systems”](https://doi.org/10.1145/275487.275492)
 
-次章からはtransactionへ進みます。まずACIDとisolation levelを、具体的な並行実行履歴から理解します。
+次章からはトランザクションへ進みます。まずACIDと分離レベルを、具体的な並行実行履歴から理解します。

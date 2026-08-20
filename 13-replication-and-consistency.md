@@ -6,26 +6,26 @@
 
 ## この章で答える問い
 
-- replicationは可用性、耐久性、読み取り性能をどこまで改善するのか
-- synchronous/asynchronous replicationではcommitの意味がどう変わるのか
-- replicaからの読み取りで古い値が返るのはなぜか
+- レプリケーションは可用性、耐久性、読み取り性能をどこまで改善するのか
+- 同期/非同期レプリケーションではコミットの意味がどう変わるのか
+- レプリカからの読み取りで古い値が返るのはなぜか
 
 ## 扱う内容
 
-- physical/logical replication、statement/row/log shippingの概略
-- leader/follower、multi-leader、leaderless
-- synchronous、semi-synchronous、asynchronous replication
-- replica lag、read scaling、failover時のデータ損失
-- strong/eventual/causal consistency
-- linearizabilityとserializabilityの違い
-- read-your-writes、monotonic reads
-- quorum read/writeと`R + W > N`の前提
-- read repair、conflict resolutionへの入口
-- network partition、CAP、PACELC
+- 物理/論理レプリケーション、文/行/ログ転送の概略
+- リーダー／フォロワー、複数リーダー、リーダーレス
+- 同期、準同期、非同期レプリケーション
+- レプリカ遅延、読み取りの負荷分散、フェイルオーバー時のデータ損失
+- 強い/結果整合的な/因果整合性
+- 線形化可能性と直列化可能性の違い
+- 自分の書き込みの読み取り保証、単調読み取り
+- クォーラム読み書きと`R + W > N`の前提
+- 読み取り時修復、競合解決への入口
+- ネットワーク分断、CAP、PACELC
 
 ## 図解・具体例
 
-注文確定直後にreplicaから注文を読むケースで、同期方式とread routingによる見え方を時系列で比較する。
+注文確定直後にレプリカから注文を読むケースで、同期方式と読み取り先の振り分けによる見え方を時系列で比較する。
 
 ## 演習・確認課題
 
@@ -33,4 +33,4 @@
 
 ## 読了時の到達目標
 
-replication方式をノード数だけでなく、commit条件、read semantics、障害時の損失から説明できる。
+レプリケーション方式をノード数だけでなく、コミット条件、読み取り意味論、障害時の損失から説明できる。

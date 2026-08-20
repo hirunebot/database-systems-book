@@ -6,29 +6,29 @@
 
 ## この章で答える問い
 
-- table scanとindex scanは何を実際に読み取るのか
-- sortやaggregationがメモリに収まらないと何が起きるのか
-- pipeliningとmaterializationにはどのような違いがあるのか
+- 表走査とインデックス走査は何を実際に読み取るのか
+- ソートや集約がメモリに収まらないと何が起きるのか
+- パイプライン処理と実体化にはどのような違いがあるのか
 
 ## 扱う内容
 
-- physical planとphysical operator
-- sequential/table scan、index scan、index-only scan、bitmap scan
-- filter、projection、limit
-- in-memory sortとexternal merge sort
-- sort aggregationとhash aggregation
-- iterator/Volcano model、pipelining、materialization
-- row-at-a-timeとvectorized execution
-- memory budget、spill、temporary file
-- parallel scanとparallel aggregationの概略
+- 物理計画と物理演算子
+- 順次/表走査、インデックス走査、インデックスのみの走査、ビットマップ走査
+- 絞り込み、射影、上限
+- メモリ内ソートと外部マージソート
+- ソート集約とハッシュ集約
+- イテレーター/Volcanoモデル、パイプライン処理、実体化
+- 1行単位とベクトル化実行
+- メモリ上限、ディスク退避、一時ファイル
+- 並列走査と並列集約の概略
 
 ## 図解・具体例
 
-同じlogical planに対する複数のphysical planを描き、行数、メモリ量、I/Oによる違いを比較する。
+同じ論理計画に対する複数の物理計画を描き、行数、メモリ量、I/Oによる違いを比較する。
 
 ## 演習・確認課題
 
-データ件数とメモリ制限を変えたとき、sortとaggregationがspillする条件を概算する。
+データ件数とメモリ制限を変えたとき、ソートと集約がディスク退避する条件を概算する。
 
 ## 読了時の到達目標
 

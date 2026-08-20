@@ -1,4 +1,4 @@
-# 00. Database Systems Book 執筆計画
+# 00. データベースシステム入門執筆計画
 
 > 執筆状況：全18章と付録の本文を作成済み。公開用本文は `src/content/docs/` に配置している。
 
@@ -24,48 +24,48 @@
 
 ## 全体構成
 
-### Part I: データベースを捉える
+### 第I部: データベースを捉える
 
 | 章 | 執筆計画 | 主題 |
 | --- | --- | --- |
 | 01 | [データベースシステムの全体像](./01-database-systems-overview.md) | SQLからストレージまでの構成要素と本書の地図 |
 | 02 | [リレーショナルモデルとスキーマ](./02-relational-model-and-schema.md) | 関係、キー、制約、正規化と物理設計の境界 |
 
-### Part II: ストレージとインデックス
+### 第II部: ストレージとインデックス
 
 | 章 | 執筆計画 | 主題 |
 | --- | --- | --- |
-| 03 | [ページ、レコード、バッファプール](./03-pages-records-and-buffer-pool.md) | page/block、heap file、slotted page、メモリ階層 |
-| 04 | [B-tree、B+tree、インデックス設計](./04-btree-and-index-design.md) | 木構造、clustered/secondary、複合・covering index |
-| 05 | [ハッシュインデックスとLSM-tree](./05-hash-index-and-lsm-tree.md) | hash index、SSTable、compaction、Bloom filter |
+| 03 | [ページ、レコード、バッファプール](./03-pages-records-and-buffer-pool.md) | ページ／ブロック、ヒープファイル、スロットページ、メモリ階層 |
+| 04 | [B-木、B+木、インデックス設計](./04-btree-and-index-design.md) | 木構造、クラスタ化/副系、複合・カバリングインデックス |
+| 05 | [ハッシュインデックスとLSM-木](./05-hash-index-and-lsm-tree.md) | ハッシュインデックス、SSTable、コンパクション、Bloomフィルター |
 
-### Part III: クエリ処理
-
-| 章 | 執筆計画 | 主題 |
-| --- | --- | --- |
-| 06 | [SQLから論理実行計画へ](./06-sql-and-logical-plans.md) | relational algebra、解析、書き換え、logical plan |
-| 07 | [物理実行と演算子](./07-physical-execution.md) | scan、sort、aggregation、materialization、pipelining |
-| 08 | [結合アルゴリズム](./08-join-algorithms.md) | nested loop、hash join、sort-merge join |
-| 09 | [コストベース最適化](./09-cost-based-optimizer.md) | 統計、cardinality、コスト、join order、EXPLAIN |
-
-### Part IV: トランザクションと障害回復
+### 第III部: クエリ処理
 
 | 章 | 執筆計画 | 主題 |
 | --- | --- | --- |
-| 10 | [ACIDと分離レベル](./10-transactions-and-isolation.md) | ACID、isolation level、直列化可能性、異常現象 |
-| 11 | [並行性制御](./11-concurrency-control.md) | MVCC、lock、deadlock、楽観・悲観、2PL、SSI |
-| 12 | [WALとクラッシュリカバリ](./12-wal-and-recovery.md) | WAL、checkpoint、redo/undo、ARIES、PITR |
+| 06 | [SQLから論理実行計画へ](./06-sql-and-logical-plans.md) | 関係代数、解析、書き換え、論理計画 |
+| 07 | [物理実行と演算子](./07-physical-execution.md) | 走査、ソート、集約、実体化、パイプライン処理 |
+| 08 | [結合アルゴリズム](./08-join-algorithms.md) | 入れ子ループ、ハッシュ結合、ソートマージ結合 |
+| 09 | [コストベース最適化](./09-cost-based-optimizer.md) | 統計、行数、コスト、結合順序、EXPLAIN |
 
-### Part V: 分散データベース
+### 第IV部: トランザクションと障害回復
 
 | 章 | 執筆計画 | 主題 |
 | --- | --- | --- |
-| 13 | [レプリケーションと整合性](./13-replication-and-consistency.md) | leader/follower、同期・非同期、quorum、整合性モデル |
-| 14 | [合意形成とRaft](./14-consensus-and-raft.md) | consensus、leader election、複製ログ、障害時の多数決 |
-| 15 | [パーティショニングとシャーディング](./15-partitioning-and-sharding.md) | range/hash、rebalancing、hotspot、分散クエリ |
-| 16 | [分散トランザクション](./16-distributed-transactions.md) | 2PC、Saga、outbox/inbox、CDC、冪等性 |
+| 10 | [ACIDと分離レベル](./10-transactions-and-isolation.md) | ACID、分離レベル、直列化可能性、異常現象 |
+| 11 | [並行性制御](./11-concurrency-control.md) | MVCC、ロック、デッドロック、楽観・悲観、2PL、SSI |
+| 12 | [WALとクラッシュリカバリ](./12-wal-and-recovery.md) | WAL、チェックポイント、再実行/取り消し、ARIES、PITR |
 
-### Part VI: アプリケーションと実運用
+### 第V部: 分散データベース
+
+| 章 | 執筆計画 | 主題 |
+| --- | --- | --- |
+| 13 | [レプリケーションと整合性](./13-replication-and-consistency.md) | リーダー／フォロワー、同期・非同期、クォーラム、整合性モデル |
+| 14 | [合意形成とRaft](./14-consensus-and-raft.md) | 合意、リーダー選挙、複製ログ、障害時の多数決 |
+| 15 | [パーティショニングとシャーディング](./15-partitioning-and-sharding.md) | 範囲/ハッシュ、再均衡化、集中箇所、分散クエリ |
+| 16 | [分散トランザクション](./16-distributed-transactions.md) | 2PC、Saga、アウトボックス/インボックス、CDC、冪等性 |
+
+### 第VI部: アプリケーションと実運用
 
 | 章 | 執筆計画 | 主題 |
 | --- | --- | --- |

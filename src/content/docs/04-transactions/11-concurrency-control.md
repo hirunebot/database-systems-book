@@ -1,114 +1,114 @@
 ---
 title: 11. 並行性制御
-description: lock、2PL、MVCC、deadlock、楽観・悲観、timestamp ordering、SSIの仕組みを比較する。
+description: ロック、2PL、MVCC、デッドロック、楽観・悲観、タイムスタンプ順序制御、SSIの仕組みを比較する。
 sidebar:
   order: 11
   label: 11. 並行性制御
 ---
 
-Isolation levelはアプリケーションから見える保証です。Concurrency controlは、その保証を実現する内部機構です。
+分離レベルはアプリケーションから見える保証です。並行性制御は、その保証を実現する内部機構です。
 
-DBMSは主に、競合するoperationを待たせる、古いversionを読ませる、危険なtransactionをabortする、という方法を組み合わせます。
+DBMSは主に、競合する操作を待たせる、古いバージョンを読ませる、危険なトランザクションを中止する、という方法を組み合わせます。
 
 ## この章で答える問い
 
-- Shared/exclusive lockはどのoperationを同時に許すのか
-- Two-phase lockingはなぜserializabilityを作れるのか
-- MVCCはreaderとwriterの競合をどう減らすのか
-- Deadlockはどう検出し、どのtransactionを犠牲にするのか
-- Optimisticとpessimistic concurrency controlをどう使い分けるのか
-- SSIはsnapshotのwrite skewをどう検出するのか
+- 共有/排他ロックはどの操作を同時に許すのか
+- 二相ロックはなぜ直列化可能性を作れるのか
+- MVCCは読み取り側と書き込み側の競合をどう減らすのか
+- デッドロックはどう検出し、どのトランザクションを犠牲にするのか
+- 楽観的と悲観的並行性制御をどう使い分けるのか
+- SSIはスナップショットの書き込みスキューをどう検出するのか
 
-## lock
+## ロック
 
-Lockはdata itemへのoperationを許可・待機させる仕組みです。基本的なmodeを考えます。
+ロックはデータ項目への操作を許可・待機させる仕組みです。基本的な方式を考えます。
 
-- **Shared（S）lock**：read用。ほかのS lockと共存できる
-- **Exclusive（X）lock**：write用。ほかのS/X lockと競合する
+- **共有（S）ロック**：読み取り用。ほかのSロックと共存できる
+- **排他（X）ロック**：書き込み用。ほかのS/Xロックと競合する
 
-### compatibility matrix
+### 互換性表
 
-| Requested \ Held | S | X |
+| 要求側 \ 保持側 | S | X |
 | --- | --- | --- |
 | S | 許可 | 待機 |
 | X | 待機 | 待機 |
 
-T1がS lockでrowを読んでいる間、T2も読めます。T2が更新するにはX lockが必要なので待ちます。
+T1がSロックで行を読んでいる間、T2も読めます。T2が更新するにはXロックが必要なので待ちます。
 
 ```mermaid
 sequenceDiagram
     participant T1
-    participant LM as Lock Manager
+    participant LM as ロック管理機構
     participant T2
-    T1->>LM: S-lock(row 7)
-    LM-->>T1: granted
-    T2->>LM: X-lock(row 7)
-    LM-->>T2: wait
-    T1->>LM: unlock
-    LM-->>T2: granted
+    T1->>LM: S-ロック(行7)
+    LM-->>T1: 許可
+    T2->>LM: X-ロック(行7)
+    LM-->>T2: 待機
+    T1->>LM: ロック解放
+    LM-->>T2: 許可
 ```
 
-実際のDBMSにはupdate lock、key-share、schema lockなど追加modeがあります。
+実際のDBMSには更新ロック、キー共有、スキーマロックなど追加方式があります。
 
-## lock granularity
+## ロック粒度
 
-Lock対象を細かくするとconcurrencyは上がりますが、lock数と管理costが増えます。
+ロック対象を細かくすると同時実行性は上がりますが、ロック数と管理コストが増えます。
 
-| Granularity | 利点 | 欠点 |
+| 粒度 | 利点 | 欠点 |
 | --- | --- | --- |
-| row/record | 異なるrowを並行更新しやすい | 大量rowでlock数が増える |
-| page | 管理数を減らせる | 同じpageの別rowも競合し得る |
-| table | 低costで全体を保護 | concurrencyが低い |
-| predicate/range | phantomを防げる | 対象判定と競合範囲が複雑 |
+| 行/レコード | 異なる行を並行更新しやすい | 大量行でロック数が増える |
+| ページ | 管理数を減らせる | 同じページの別行も競合し得る |
+| 表 | 低コストで全体を保護 | 同時実行性が低い |
+| 述語/範囲 | ファントムを防げる | 対象判定と競合範囲が複雑 |
 
-大量のrow lockをtable lockへまとめるlock escalationを行う製品があります。Memoryを守る代わりに競合範囲が広がります。
+大量の行ロックを表ロックへまとめるロック昇格を行う製品があります。メモリを守る代わりに競合範囲が広がります。
 
-## intention lock
+## 意図ロック
 
-Tableとrowの階層lockを併用すると、「table全体をlockしたいtransaction」が子row lockをすべて調べるのは高costです。
+表と行の階層ロックを併用すると、「表全体をロックしたいトランザクション」が子行ロックをすべて調べるのは高コストです。
 
-Intention lockは、下位granularityでlockを取得する意図を上位へ記録します。
+意図ロックは、下位粒度でロックを取得する意図を上位へ記録します。
 
-- IS：下位にS lockを取る意図
-- IX：下位にX lockを取る意図
-- SIX：tableにS、下位にXを取る意図
+- IS：下位にSロックを取る意図
+- IX：下位にXロックを取る意図
+- SIX：表にS、下位にXを取る意図
 
 ```mermaid
 flowchart TB
-    T["Table: IX"] --> P["Page: IX"]
-    P --> R["Row 42: X"]
+    T["表: IX"] --> P["ページ: IX"]
+    P --> R["行42: X"]
 ```
 
-Table X lock要求は、既存IXと競合するとすぐ判断できます。
+表Xロック要求は、既存IXと競合するとすぐ判断できます。
 
-## Two-Phase Locking
+## 二相ロック
 
-Two-Phase Locking（2PL）は、transactionのlock操作を二つのphaseへ分けます。
+二相ロック（2PL）は、トランザクションのロック操作を二つの段階へ分けます。
 
-1. **Growing phase**：lockを取得する。解放しない
-2. **Shrinking phase**：lockを解放する。新しく取得しない
+1. **拡大段階**：ロックを取得する。解放しない
+2. **縮小段階**：ロックを解放する。新しく取得しない
 
 ```mermaid
 flowchart LR
-    Begin["BEGIN"] --> Grow["Growing<br/>acquire locks"]
-    Grow --> Point["Lock point"]
-    Point --> Shrink["Shrinking<br/>release locks"]
+    Begin["BEGIN"] --> Grow["拡大<br/>ロックを取得"]
+    Grow --> Point["ロック獲得終了点"]
+    Point --> Shrink["縮小<br/>ロックを解放"]
     Shrink --> End["END"]
 ```
 
-2PLでconflict-serializableなscheduleを作れます。しかし、commit前にwrite lockを解放すると、別transactionが未commit値を読んだり上書きしたりする可能性があります。
+2PLで競合直列化可能なスケジュールを作れます。しかし、コミット前に書き込みロックを解放すると、別トランザクションが未コミット値を読んだり上書きしたりする可能性があります。
 
-### strict 2PL
+### 厳格二相ロック
 
-Strict 2PLは少なくともX lockをcommit/rollbackまで保持します。Cascading abortを防ぎ、recoveryを単純化します。
+厳格二相ロックは少なくともXロックをコミット/ロールバックまで保持します。連鎖的中止を防ぎ、復旧を単純化します。
 
-Rigorous 2PLはS/X lockの両方をtransaction終了まで保持します。
+完全二相ロックはS/Xロックの両方をトランザクション終了まで保持します。
 
-Lockを長く持つほど安全性は分かりやすくなりますが、待機時間とdeadlock可能性が増えます。
+ロックを長く持つほど安全性は分かりやすくなりますが、待機時間とデッドロック可能性が増えます。
 
-## predicateとphantom
+## 述語とファントム
 
-次のqueryで「予約がなければinsert」するとします。
+次のクエリで「予約がなければ挿入」するとします。
 
 ```sql
 SELECT COUNT(*)
@@ -117,122 +117,122 @@ WHERE room_id = 7
   AND reserved_on = DATE '2026-08-21';
 ```
 
-現在該当rowが0件なら、row lock対象がありません。別transactionが同じ条件のrowをinsertするとphantomが発生します。
+現在該当行が0件なら、行ロック対象がありません。別トランザクションが同じ条件の行を挿入するとファントムが発生します。
 
 対策：
 
-- Index key range/gap lock
-- Predicate lock
-- Serializable validation
-- Capacityを表す共通rowを明示lock
+- インデックスキー 範囲／ギャップロック
+- 述語ロック
+- 直列化可能性の検証
+- 容量を表す共通行を明示ロック
 
-物理的なrange lockと論理predicate lockは実装が異なります。Indexがないpredicateでは広い範囲をlockする可能性があります。
+物理的な範囲ロックと論理述語ロックは実装が異なります。インデックスがない述語では広い範囲をロックする可能性があります。
 
-## deadlock
+## デッドロック
 
-T1がAをlockしてBを待ち、T2がBをlockしてAを待つとcycleになります。
+T1がAをロックしてBを待ち、T2がBをロックしてAを待つと循環になります。
 
 ```mermaid
 flowchart LR
-    T1["T1<br/>holds A"] -->|"waits for B"| T2["T2<br/>holds B"]
-    T2 -->|"waits for A"| T1
+    T1["T1<br/>Aを保持"] -->|"Bを待機"| T2["T2<br/>Bを保持"]
+    T2 -->|"Aを待機"| T1
 ```
 
 待つだけでは永久に進まないため、DBMSは対処します。
 
-### detection
+### 検出
 
-Wait-for graphを作り、cycleを検出します。Cycle内の一つをvictimとしてabortし、そのlockを解放します。
+待機グラフを作り、循環を検出します。循環内の一つを犠牲対象として中止し、そのロックを解放します。
 
-Victim選択には次を考慮できます。
+犠牲対象選択には次を考慮できます。
 
 - 実行時間
-- 変更量とrollback cost
+- 変更量とロールバックコスト
 - 優先度
-- retry回数
-- 保持resource
+- 再試行回数
+- 保持資源
 
-### timeout
+### タイムアウト
 
-一定時間待ったtransactionをabortします。実装は単純ですが、deadlockでない長い待機もabortし、timeoutまで無駄に待ちます。
+一定時間待ったトランザクションを中止します。実装は単純ですが、デッドロックでない長い待機も中止し、タイムアウトまで無駄に待ちます。
 
-### prevention
+### 予防
 
-Timestampによるwait-die/wound-waitや、resource取得順の統一でcycleを防ぎます。
+タイムスタンプによるwait-die／wound-waitや、資源取得順の統一で循環を防ぎます。
 
-Applicationで有効な原則：
+アプリケーションで有効な原則：
 
-- Rowを常に同じkey順で更新する
-- Transactionを短くする
-- User inputやnetwork callをlock保持中に待たない
-- 一度に扱うrow数を制限する
+- 行を常に同じキー順で更新する
+- トランザクションを短くする
+- 利用者入力やネットワーク呼び出しをロック保持中に待たない
+- 一度に扱う行数を制限する
 
-Deadlockを完全に排除できなくても、transaction全体をretryできれば回復できます。
+デッドロックを完全に排除できなくても、トランザクション全体を再試行できれば回復できます。
 
 ## MVCC
 
-Multi-Version Concurrency Control（MVCC）は、同じlogical rowの複数versionを保持し、transactionのsnapshotに見えるversionを選びます。
+多版並行性制御（MVCC）は、同じ論理行の複数バージョンを保持し、トランザクションのスナップショットに見えるバージョンを選びます。
 
 ```mermaid
 flowchart LR
-    V1["v1<br/>status=pending<br/>created by T10"] --> V2["v2<br/>status=confirmed<br/>created by T20"]
+    V1["v1<br/>状態=保留中<br/>作成者T10"] --> V2["v2<br/>状態=確定済み<br/>作成者T20"]
 ```
 
-T20のcommit前に開始したreaderはv1を、commit後のsnapshotはv2を見るというように、readerがwriterを待たずにconsistent viewを得られます。
+T20のコミット前に開始した読み取り側はv1を、コミット後のスナップショットはv2を見るというように、読み取り側が書き込み側を待たずに一貫したビューを得られます。
 
-### snapshot
+### スナップショット
 
-Snapshotは「どのtransactionの変更までvisibleか」を表します。
+スナップショットは「どのトランザクションの変更まで可視か」を表します。
 
-概念的なvisibility rule：
+概念的な可視性規則：
 
-- snapshotより前にcommitしたversionは見える
-- snapshot後に開始/commitしたversionは見えない
-- aborted transactionのversionは見えない
-- 自分のtransactionの変更は見える
-- delete/updateで無効化されたversionもsnapshot時点によって見える
+- スナップショットより前にコミットしたバージョンは見える
+- スナップショット後に開始/コミットしたバージョンは見えない
+- 中止済みトランザクションのバージョンは見えない
+- 自分のトランザクションの変更は見える
+- 削除／更新で無効化されたバージョンもスナップショット時点によって見える
 
-実装はtransaction ID range、active transaction list、commit timestamp、undo chainなどを使います。
+実装はトランザクションID範囲、実行中トランザクションリスト、コミットタイムスタンプ、取り消し連鎖などを使います。
 
-### PostgreSQL型のversion
+### PostgreSQL型のバージョン
 
-PostgreSQLはheap上に新しいtuple versionを作り、xmin/xmaxなどのmetadataでvisibilityを判定します。古いversionはVACUUMが回収します。
+PostgreSQLはヒープ上に新しいタプルバージョンを作り、xmin/xmaxなどのメタデータで可視性を判定します。古いバージョンはVACUUMが回収します。
 
-### InnoDB型のversion
+### InnoDB型のバージョン
 
-InnoDBはclustered recordとundo logを使い、read viewに必要な古いversionをundo chainから再構築します。
+InnoDBはクラスタ化レコードと取り消しログを使い、読み取りビューに必要な古いバージョンを取り消し連鎖から再構築します。
 
-同じMVCCでも、version配置とgarbage collectionが異なります。
+同じMVCCでも、バージョン配置とガベージコレクションが異なります。
 
-## MVCCでもwriteは競合する
+## MVCCでも書き込みは競合する
 
-MVCCは主にread-write conflictを減らします。同じrowを二つのtransactionが更新するwrite-write conflictは、lock待ち、first-updater/committer-wins、abortなどで処理します。
+MVCCは主に読み取り-書き込み競合を減らします。同じ行を二つのトランザクションが更新する書き込み-書き込み競合は、ロック待ち、先更新者／先コミッター優先、中止などで処理します。
 
 ```text
-T1 updates row 7 → new version
-T2 updates row 7 → wait or abort
+T1が行7を更新 → 新しいバージョン
+T2が行7を更新 → 待機または中止
 ```
 
-「MVCCならlockを使わない」は誤りです。Row lock、index lock、schema lock、predicate protectionなどを併用します。
+「MVCCならロックを使わない」は誤りです。行ロック、インデックスロック、スキーマロック、述語保護などを併用します。
 
-## garbage collectionとlong transaction
+## ガベージコレクションと長時間トランザクション
 
-古いsnapshotを持つtransactionがいる間、そのsnapshotから見えるold versionを消せません。
+古いスナップショットを持つトランザクションがいる間、そのスナップショットから見える古いバージョンを消せません。
 
-Long-running transactionの影響：
+長時間トランザクションの影響：
 
-- dead tuple/undo historyが増える
-- table/index bloat
-- vacuum/compactionが進めない
-- transaction ID wraparound対策を妨げる
-- storageとBuffer Poolを圧迫する
-- replica applyやDDLへ影響する
+- 不要タプル/取り消し履歴が増える
+- 表/インデックス肥大化
+- 不要版の回収/コンパクションが進めない
+- トランザクションID周回対策を妨げる
+- ストレージとバッファプールを圧迫する
+- レプリカ適用やDDLへ影響する
 
-Idle in transactionなconnectionもsnapshot/lockを保持する可能性があります。Transaction timeoutとmonitoringが重要です。
+トランザクション内でアイドル状態の接続もスナップショット/ロックを保持する可能性があります。トランザクションタイムアウトと監視が重要です。
 
-## pessimistic concurrency control
+## 悲観的並行性制御
 
-競合が起きると予想し、操作前にlockを取得します。
+競合が起きると予想し、操作前にロックを取得します。
 
 ```sql
 BEGIN;
@@ -242,7 +242,7 @@ FROM inventory
 WHERE product_id = 7
 FOR UPDATE;
 
--- applicationで判断
+-- アプリケーションで判断
 UPDATE inventory
 SET available = available - 1
 WHERE product_id = 7;
@@ -253,20 +253,20 @@ COMMIT;
 利点：
 
 - 競合時に早く待たせ、更新直前の状態を確保する
-- 長い計算後のabortを避けられる場合がある
-- hot resourceの順序を制御しやすい
+- 長い計算後の中止を避けられる場合がある
+- 高負荷資源の順序を制御しやすい
 
 欠点：
 
-- 待機とdeadlock
-- Lock保持中のfailureがほかを止める
-- Read-onlyまで不要にblockする設計になり得る
+- 待機とデッドロック
+- ロック保持中の障害がほかを止める
+- 読み取り専用まで不要に停止する設計になり得る
 
-## optimistic concurrency control
+## 楽観的並行性制御
 
-競合が少ないと仮定し、read/computeをlockなしで進め、commit前に変更されていないかvalidateします。
+競合が少ないと仮定し、読み取り/計算をロックなしで進め、コミット前に変更されていないか検証します。
 
-Application levelのversion column例：
+アプリケーション層のバージョン列例：
 
 ```sql
 SELECT id, status, version
@@ -280,121 +280,121 @@ WHERE id = 42
   AND version = 7;
 ```
 
-Affect row countが0なら誰かが先に更新したため、再読込・merge・retryします。
+更新行数が0なら誰かが先に更新したため、再読込・マージ・再試行します。
 
-一般的なOCC phase：
+一般的なOCC段階：
 
-1. Read phase
-2. Validation phase
-3. Write phase
+1. 読み取り段階
+2. 検証段階
+3. 書き込み段階
 
 利点：
 
 - 競合が少なければ待機が少ない
-- Read/compute中にlockを保持しない
-- Webの編集画面など長いthink timeへ使いやすい
+- 読み取り/計算中にロックを保持しない
+- Webの編集画面など長い操作待ち時間へ使いやすい
 
 欠点：
 
-- 競合が多いとabortと再計算が増える
-- 副作用を伴う処理のretryが難しい
-- 複数row/predicateのvalidationが複雑
+- 競合が多いと中止と再計算が増える
+- 副作用を伴う処理の再試行が難しい
+- 複数行/述語の検証が複雑
 
-## timestamp ordering
+## タイムスタンプ順序制御
 
-各transactionへtimestampを割り当て、operationがtimestamp順序に反しないか検査します。
+各トランザクションへタイムスタンプを割り当て、操作がタイムスタンプ順序に反しないか検査します。
 
-Data itemごとにread timestamp/write timestampを持ち、古いtransactionの遅れたwriteをabortする方式があります。
+データ項目ごとに読み取りタイムスタンプ/書き込みタイムスタンプを持ち、古いトランザクションの遅れた書き込みを中止する方式があります。
 
-Lock待ちを避けられる一方、競合時にabortが増え、timestamp/metadata管理が必要です。MVCCと組み合わせたmulti-version timestamp orderingもあります。
+ロック待ちを避けられる一方、競合時に中止が増え、タイムスタンプ/メタデータ管理が必要です。MVCCと組み合わせた多版タイムスタンプ順序制御もあります。
 
-## Serializable Snapshot Isolation
+## 直列化可能スナップショット分離
 
-Serializable Snapshot Isolation（SSI）は、Snapshot Isolationのnon-blocking readを保ちつつ、serializabilityを壊す依存関係を検出してtransactionをabortします。
+直列化可能スナップショット分離（SSI）は、スナップショット分離の非停止読み取りを保ちつつ、直列化可能性を壊す依存関係を検出してトランザクションを中止します。
 
-Write skewでは次のrw-dependencyができます。
+書き込みスキューでは次のrw-依存関係ができます。
 
 ```mermaid
 flowchart LR
-    T1["T1<br/>reads Bob, writes Alice"] -->|"rw dependency"| T2["T2<br/>reads Alice, writes Bob"]
-    T2 -->|"rw dependency"| T1
+    T1["T1<br/>読み取るBob, 書き込むAlice"] -->|"rw依存関係"| T2["T2<br/>読み取るAlice, 書き込むBob"]
+    T2 -->|"rw依存関係"| T1
 ```
 
-SSIはdangerous structureを追跡し、cycleになり得るtransactionをabortします。
+SSIは危険構造を追跡し、循環になり得るトランザクションを中止します。
 
 利点：
 
-- Readerがwriterを直接blockしにくい
-- Snapshot readの性能を保ちやすい
+- 読み取り側が書き込み側を直接停止しにくい
+- スナップショット読み取りの性能を保ちやすい
 
-Cost：
+コスト：
 
-- Dependency tracking memory
-- False positive abort
-- Application retry
-- Long transactionでtrackingが増える
+- 依存関係の追跡メモリ
+- 偽陽性中止
+- アプリケーション再試行
+- 長時間トランザクションで追跡量が増える
 
-Serializableをlockで実現するかSSIで実現するかにより、待機とabortのprofileが変わります。
+Serializableをロックで実現するかSSIで実現するかにより、待機と中止のプロフィールが変わります。
 
-## lock waitを診断する
+## ロック待機を診断する
 
 確認するもの：
 
-1. Blocked transactionとblocker
-2. 待っているlock mode/resource
-3. Blockerが実行中かidle in transactionか
-4. Transaction開始時刻と最後のstatement
-5. Access順序
-6. Index不足によって広いrowをlockしていないか
-7. Application timeoutとDB timeoutの関係
+1. 待機中トランザクションとブロッカー
+2. 待っているロック方式/資源
+3. ブロッカーが実行中か、トランザクション内でアイドル状態か
+4. トランザクション開始時刻と最後の文
+5. アクセス順序
+6. インデックス不足によって広い行をロックしていないか
+7. アプリケーションタイムアウトとDBタイムアウトの関係
 
-Blockerのqueryだけでなく、transaction全体とrequest traceを結びつけます。
+ブロッカーのクエリだけでなく、トランザクション全体とリクエストトレースを結びつけます。
 
-## concurrency strategyを選ぶ
+## 並行性制御方式を選ぶ
 
 | 状況 | 第一候補 |
 | --- | --- |
-| Hotな在庫1 rowを短く更新 | atomic UPDATEまたはpessimistic row lock |
-| 競合の少ない編集画面 | version columnによるoptimistic control |
-| Consistent read-heavy report | MVCC snapshot |
-| 複数rowのpredicate不変条件 | Serializable / predicate protection |
-| 同じ複数rowを更新 | 一貫したlock順 + retry |
+| 高負荷な在庫1行を短く更新 | 原子的なUPDATEまたは悲観的行ロック |
+| 競合の少ない編集画面 | バージョン列による楽観的制御 |
+| 一貫した読み取り中心のレポート | MVCCスナップショット |
+| 複数行の述語不変条件 | Serializable / 述語保護 |
+| 同じ複数行を更新 | 一貫したロック順 + 再試行 |
 
-DB isolationとapplication OCCは併用できます。
+DB分離性とアプリケーションOCCは併用できます。
 
 ## よくある誤解
 
-### 「MVCCはlock-freeである」
+### 「MVCCはロック不要である」
 
-Version readはblockを減らしますが、write conflict、index、DDL、constraintにはlockが必要です。
+バージョン読み取りは停止を減らしますが、書き込み競合、インデックス、DDL、制約にはロックが必要です。
 
-### 「deadlockはbugなのでretryしてはいけない」
+### 「デッドロックは不具合なので再試行してはいけない」
 
-Access順不統一は改善すべきですが、完全排除が困難な並行systemではdeadlock victim retryは通常の回復手段です。
+アクセス順不統一は改善すべきですが、完全排除が困難な並行システムではデッドロック犠牲対象再試行は通常の回復手段です。
 
-### 「optimisticは常に高速である」
+### 「楽観的は常に高速である」
 
-Hot spotではabort/retryが仕事を増やします。競合率と再実行costで判断します。
+高負荷箇所では中止/再試行が仕事を増やします。競合率と再実行コストで判断します。
 
 ## まとめ
 
-- S/X lockはread/readを許し、writeを排他的にする
-- Granularityを細かくするとconcurrencyが上がるがlock管理costも増える
-- 2PLはgrowing/shrinking phaseでserializabilityを作り、strict 2PLはwrite lockを終了まで保持する
-- Predicate/range protectionがないとphantomを防げない
-- Deadlockはwait-for graphのcycleであり、victim abortとretryで解消する
-- MVCCはsnapshotからvisible versionを選びreader/writer競合を減らす
-- Old version回収はlong transactionに妨げられる
-- Pessimisticは待機、optimisticはvalidation failureを選ぶ
-- SSIはsnapshot間のdangerous dependencyを検出してabortする
+- S/Xロックは読み取り/読み取りを許し、書き込みを排他的にする
+- 粒度を細かくすると同時実行性が上がるがロック管理コストも増える
+- 2PLは拡大/縮小段階で直列化可能性を作り、厳格二相ロックは書き込みロックを終了まで保持する
+- 述語/範囲保護がないとファントムを防げない
+- デッドロックは待機グラフの循環であり、犠牲対象中止と再試行で解消する
+- MVCCはスナップショットから可視バージョンを選び読み取り側/書き込み側競合を減らす
+- 古いバージョン回収は長時間トランザクションに妨げられる
+- 悲観的は待機、楽観的は検証障害を選ぶ
+- SSIはスナップショット間の危険依存関係を検出して中止する
 
 ## 確認問題
 
-1. S/X compatibility matrixを使い、readとwriteの待機を説明してください。
-2. Strict 2PLがcascading abortを防ぐ理由は何ですか。
-3. 存在しないrowへのphantomをrow lockだけで防げない理由を説明してください。
-4. MVCCのlong-running transactionがstorageを増やす経路を説明してください。
-5. Hot counterでoptimistic controlが不利になる理由は何ですか。
+1. S/X互換性表を使い、読み取りと書き込みの待機を説明してください。
+2. 厳格二相ロックが連鎖的中止を防ぐ理由は何ですか。
+3. 存在しない行へのファントムを行ロックだけで防げない理由を説明してください。
+4. MVCCの長時間トランザクションがストレージを増やす経路を説明してください。
+5. 高負荷カウンターで楽観的制御が不利になる理由は何ですか。
 
 ## 参考資料
 
@@ -403,4 +403,4 @@ Hot spotではabort/retryが仕事を増やします。競合率と再実行cost
 - [MySQL Documentation: InnoDB Locking](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html)
 - [Michael J. Cahill et al., “Serializable Isolation for Snapshot Databases”](https://doi.org/10.1145/1376616.1376690)
 
-次章では、transactionのAtomicityとDurabilityをcrash後に回復するWAL、checkpoint、redo/undo、ARIESを扱います。
+次章では、トランザクションの原子性と永続性をクラッシュ後に回復するWAL、チェックポイント、再実行/取り消し、ARIESを扱います。

@@ -2,26 +2,26 @@
 
 ## この章の役割
 
-1ノードへ収まらないデータや負荷を分割する方法と、分割によって新たに生まれるrouting、偏り、再配置の問題を扱う。
+1ノードへ収まらないデータや負荷を分割する方法と、分割によって新たに生まれる振り分け、偏り、再配置の問題を扱う。
 
 ## この章で答える問い
 
-- partitioningとshardingはどの文脈で使い分けるのか
-- range/hash partitioningは、検索と負荷分散にどう影響するのか
-- shardを増減すると、なぜデータ移動が難しくなるのか
+- 分割とシャーディングはどの文脈で使い分けるのか
+- 範囲/ハッシュ分割は、検索と負荷分散にどう影響するのか
+- シャードを増減すると、なぜデータ移動が難しくなるのか
 
 ## 扱う内容
 
-- horizontal/vertical partitioning
-- range、hash、list partitioning
-- consistent hashingとvirtual node
-- shard keyの条件とco-location
-- routing、scatter-gather、distributed query execution
-- local/global secondary index
-- data skew、hot key、hot partition
-- split、merge、rebalancing、resharding
-- online migration中のdual read/writeと整合性
-- partition pruningとcross-shard join
+- 水平/垂直分割
+- 範囲、ハッシュ、リスト分割
+- コンシステントハッシュ法と仮想ノード
+- シャードキーの条件とコロケーション
+- 振り分け、分散問い合わせと集約、分散クエリ実行
+- 局所/グローバルセカンダリインデックス
+- データ偏り、高負荷キー、高負荷パーティション
+- 分割、マージ、再均衡化、再シャーディング
+- オンライン移行中のdual読み取り/書き込みと整合性
+- パーティション刈り込みとシャード横断結合
 
 ## 図解・具体例
 
@@ -29,8 +29,8 @@
 
 ## 演習・確認課題
 
-想定クエリ、成長率、偏りを与えられたシステムに対してshard keyを選び、弱点も記述する。
+想定クエリ、成長率、偏りを与えられたシステムに対してシャードキーを選び、弱点も記述する。
 
 ## 読了時の到達目標
 
-shardingを容量対策だけでなく、routing、再配置、トランザクション境界を含む設計として評価できる。
+シャーディングを容量対策だけでなく、振り分け、再配置、トランザクション境界を含む設計として評価できる。

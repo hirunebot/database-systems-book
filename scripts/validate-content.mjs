@@ -22,7 +22,7 @@ async function walk(directory) {
 }
 
 function routeFor(relativePath) {
-  const withoutExtension = relativePath.replace(/\.mdx?$/, '');
+  const withoutExtension = relativePath.replace(/\\/g, '/').replace(/\.mdx?$/, '');
   if (withoutExtension === 'index') return '/';
   if (withoutExtension === '404') return '/404';
   return `/${withoutExtension}/`;

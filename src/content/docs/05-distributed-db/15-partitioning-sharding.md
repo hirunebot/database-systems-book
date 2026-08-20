@@ -1,76 +1,76 @@
 ---
 title: 15. パーティショニングとシャーディング
-description: range/hash partitioning、shard key、routing、skew、global index、rebalancing、distributed queryを理解する。
+description: 範囲/ハッシュ分割、シャードキー、振り分け、偏り、全体インデックス、再均衡化、分散クエリを理解する。
 sidebar:
   order: 15
   label: 15. パーティショニングとシャーディング
 ---
 
-一つのnodeへdata、write throughput、read loadが収まらなくなると、dataを複数のpartitionへ分けます。分割により容量を増やせますが、request routing、cross-partition query、rebalancing、transactionという新しいcostが生まれます。
+一つのノードへデータ、書き込み処理量、読み取り負荷が収まらなくなると、データを複数のパーティションへ分けます。分割により容量を増やせますが、リクエスト振り分け、パーティション横断クエリ、再均衡化、トランザクションという新しいコストが生まれます。
 
-Shardingの難しさは「どう分けるか」より、「分けた後にqueryとdataが変化し続けること」です。
+シャーディングの難しさは「どう分けるか」より、「分けた後にクエリとデータが変化し続けること」です。
 
 ## この章で答える問い
 
-- Horizontal/vertical partitioningは何を分けるのか
-- Range/hash partitioningはquery localityとload balanceをどう交換するのか
-- 良いshard keyはどのような性質を持つのか
-- Global secondary indexはwriteとconsistencyをどう複雑にするのか
-- Hot partitionとdata skewをどう検出・緩和するのか
-- Online resharding中のread/writeをどう正しくrouteするのか
+- 水平/垂直分割は何を分けるのか
+- 範囲/ハッシュ分割はクエリ局所性と負荷分散をどう交換するのか
+- 良いシャードキーはどのような性質を持つのか
+- グローバルセカンダリインデックスは書き込みと整合性をどう複雑にするのか
+- 高負荷パーティションとデータ偏りをどう検出・緩和するのか
+- オンライン再シャーディング中の読み取り/書き込みをどう正しく振り分けするのか
 
-## partitioningとsharding
+## 分割とシャーディング
 
 用語は製品によって異なります。本書では：
 
-- **Partitioning**：一つのlogical table/data setを複数部分へ分割する一般概念
-- **Sharding**：partitionを複数node/failure domainへ配置するhorizontal partitioning
+- **分割**：一つの論理表/データ集合を複数部分へ分割する一般概念
+- **シャーディング**：パーティションを複数ノード/障害領域へ配置する水平分割
 
-一つのDB instance内のtable partitionも、複数nodeのshardも、keyから対象partitionを決める点は共通します。ただしshardingではnetwork、partial failure、distributed transactionが加わります。
+一つのDBインスタンス内の表パーティションも、複数ノードのシャードも、キーから対象パーティションを決める点は共通します。ただしシャーディングではネットワーク、部分障害、分散トランザクションが加わります。
 
-## horizontal partitioning
+## 水平分割
 
-Rowをpartition keyで分けます。
+行をパーティションキーで分けます。
 
 ```mermaid
 flowchart TB
-    Orders["orders"] --> P1["Partition A<br/>customer 0..999"]
-    Orders --> P2["Partition B<br/>customer 1000..1999"]
-    Orders --> P3["Partition C<br/>customer 2000.."]
+    Orders["注文"] --> P1["パーティションA<br/>顧客0..999"]
+    Orders --> P2["パーティションB<br/>顧客1000..1999"]
+    Orders --> P3["パーティションC<br/>顧客2000.."]
 ```
 
-各partitionは同じcolumn schemaを持ち、row集合が異なります。
+各パーティションは同じ列スキーマを持ち、行集合が異なります。
 
 利点：
 
-- Data容量とwriteを分散
-- Partition pruning
-- Old partitionのarchive/drop
-- Maintenance単位を小さくする
+- データ容量と書き込みを分散
+- パーティション刈り込み
+- 古いパーティションのアーカイブ/削除
+- 保守単位を小さくする
 
 課題：
 
-- Cross-partition query
-- Skew
-- Partition metadata
-- Rebalancing
+- パーティション横断クエリ
+- 偏り
+- パーティションメタデータ
+- 再均衡化
 
-## vertical partitioning
+## 垂直分割
 
-Column groupまたは機能単位で分けます。
+列グループまたは機能単位で分けます。
 
 ```text
-users_core(id, email, name)
+users_core(id, メール, name)
 users_profile(id, bio, avatar_blob, preferences)
 ```
 
-頻繁に読むsmall columnとlarge/cold columnを分け、row幅とI/Oを減らせます。別service/DBへ分ける場合はjoinとtransactionを失い、applicationで統合するcostが増えます。
+頻繁に読む小規模列と大規模/低負荷列を分け、行幅とI/Oを減らせます。別サービス/DBへ分ける場合は結合とトランザクションを失い、アプリケーションで統合するコストが増えます。
 
-Normalizationによるtable分割と似ていますが、vertical partitioningはaccess patternや物理配置を主目的にする場合があります。
+正規化による表分割と似ていますが、垂直分割はアクセスパターンや物理配置を主目的にする場合があります。
 
-## range partitioning
+## 範囲分割
 
-Keyの連続範囲をpartitionへ割り当てます。
+キーの連続範囲をパーティションへ割り当てます。
 
 ```text
 P1: 2026-01-01 <= ordered_at < 2026-02-01
@@ -80,151 +80,151 @@ P3: 2026-03-01 <= ordered_at < 2026-04-01
 
 利点：
 
-- Range queryが少数partitionへ局所化
-- 時系列dataのdrop/archive
-- Sorted locality
-- Split境界を理解しやすい
+- 範囲クエリが少数パーティションへ局所化
+- 時系列データの削除/アーカイブ
+- 整列による局所性
+- 分割境界を理解しやすい
 
 欠点：
 
-- Monotonic keyで最新partitionへwrite集中
-- Range sizeとloadが不均等
-- Hot key range
-- Boundary管理
+- 単調キーで最新パーティションへ書き込み集中
+- 範囲大きさと負荷が不均等
+- 高負荷キー 範囲
+- 境界管理
 
-Time seriesではwrite hotspotを許容しつつ、bucket内をhash subpartitionする方法があります。
+時系列では書き込み集中箇所を許容しつつ、バケット内をハッシュ再分割する方法があります。
 
-## hash partitioning
+## ハッシュ分割
 
-Hash(key) mod Nなどでpartitionを選びます。
+ハッシュ(キー) mod Nなどでパーティションを選びます。
 
 ```mermaid
 flowchart LR
-    K["customer_id"] --> H["hash"]
-    H --> P1["Shard 0"]
-    H --> P2["Shard 1"]
-    H --> P3["Shard 2"]
+    K["customer_id"] --> H["ハッシュ"]
+    H --> P1["シャード0"]
+    H --> P2["シャード1"]
+    H --> P3["シャード2"]
 ```
 
 利点：
 
-- Uniform keyならloadを分散しやすい
-- Point lookupのroutingが明確
-- Monotonic keyのwriteを分散
+- 一様キーなら負荷を分散しやすい
+- 単一キー検索の振り分けが明確
+- 単調キーの書き込みを分散
 
 欠点：
 
-- Range localityを失う
-- Partition数変更で多くのkeyが移動
-- Hot key一つは分散できない
-- Hash前のkey distributionとrequest distributionは別
+- 範囲局所性を失う
+- パーティション数変更で多くのキーが移動
+- 高負荷キー一つは分散できない
+- ハッシュ前のキーの分布とリクエスト分布は別
 
-Uniform row数でも、有名customerへtrafficが集中すればhot shardになります。
+一様行数でも、有名顧客へ通信量が集中すれば高負荷シャードになります。
 
-## consistent hashing
+## コンシステントハッシュ法
 
-単純hash mod NではN変更時に多くのkeyの割り当てが変わります。Consistent hashingはnodeとkeyをring上へ配置し、node追加・削除時の移動範囲を限定します。
+単純な「ハッシュ値 mod N」では、Nの変更時に多くのキーの割り当てが変わります。コンシステントハッシュ法はノードとキーをリング上へ配置し、ノード追加・削除時の移動範囲を限定します。
 
 ```mermaid
 flowchart LR
-    A["Node A"] --> B["Node B"]
-    B --> C["Node C"]
+    A["ノードA"] --> B["ノードB"]
+    B --> C["ノードC"]
     C --> A
 ```
 
-Virtual node/tokenを各physical nodeへ複数割り当てると：
+仮想ノード/トークンを各物理ノードへ複数割り当てると：
 
-- Loadを細かく分散
-- Heterogeneous capacityに比例配分
+- 負荷を細かく分散
+- 異なるノード容量に応じた比例配分
 - 移動単位を小さくする
 
-ただしvirtual node数が多いほどmetadataとreplica placementが複雑になります。
+ただし仮想ノード数が多いほどメタデータとレプリカ配置が複雑になります。
 
-Modern distributed DBではrange partitionを自動splitし、placement managerがrangeをnodeへ割り当てる方式もあります。Consistent hashingだけがrebalancing解ではありません。
+近年の分散DBでは範囲パーティションを自動分割し、配置管理機構が範囲をノードへ割り当てる方式もあります。コンシステントハッシュ法だけが再均衡化の解ではありません。
 
-## list partitioning
+## リスト分割
 
 明示値集合で分けます。
 
 ```text
-JP, KR → Asia-East partition
-US, CA → North-America partition
-DE, FR → Europe partition
+JP, KR → 東アジアパーティション
+US, CA → 北米パーティション
+DE, FR → 欧州パーティション
 ```
 
-Data residencyやregion routingを表現しやすい一方、地域間load差、未分類値、region変更を扱います。
+データ所在地要件やリージョン振り分けを表現しやすい一方、地域間負荷差、未分類値、リージョン変更を扱います。
 
-## shard key
+## シャードキー
 
-Shard keyはdata placementとrequest routingを決める最重要設計です。
+シャードキーはデータ配置とリクエスト振り分けを決める最重要設計です。
 
 良い性質：
 
-- Cardinalityが十分高い
-- Write/read loadが均等
-- 主要queryがkeyを指定する
-- Co-locateしたいdataで共有できる
+- 行数が十分高い
+- 書き込み/読み取り負荷が均等
+- 主要クエリがキーを指定する
+- 同じ場所に配置したいデータで共有できる
 - 値が安定して変更されにくい
-- Tenant isolation/region要件に合う
+- テナント分離性/リージョン要件に合う
 
 ### customer_idで注文を分ける
 
 ```text
-shard = hash(customer_id)
+シャード = ハッシュ(customer_id)
 ```
 
-顧客別注文一覧と顧客単位transactionを一shardへ閉じ込められます。
+顧客別注文一覧と顧客単位トランザクションを一シャードへ閉じ込められます。
 
 弱点：
 
-- 全顧客の時間range reportはscatter-gather
-- Large customerがhotspot
-- Customer IDを持たないaccess pathにglobal indexが必要
+- 全顧客の時間範囲レポートは分散問い合わせと集約
+- 大規模顧客が集中箇所
+- 顧客IDを持たないアクセス経路に全体インデックスが必要
 
 ### ordered_atで分ける
 
-時系列scanとarchiveに向きますが、最新rangeへwriteが集中し、顧客別履歴が複数partitionへ散ります。
+時系列走査とアーカイブに向きますが、最新範囲へ書き込みが集中し、顧客別履歴が複数パーティションへ散ります。
 
-「最もselectiveなcolumn」ではなく、transaction boundary、query locality、growth、hotspotを合わせて選びます。
+「最も選択率の高い列」ではなく、トランザクション境界、クエリ局所性、増加傾向、集中箇所を合わせて選びます。
 
-## composite partitioning
+## 複合分割
 
-Range + hashなどを組み合わせます。
+範囲 + ハッシュなどを組み合わせます。
 
 ```text
-first: month(ordered_at)
-then:  hash(customer_id) into 16 buckets
+最初: month(ordered_at)
+次に: ハッシュ(customer_id)を16バケットへ振り分け
 ```
 
-時間range pruningとwrite分散を両立できますが、partition数、metadata、small partitionを増やします。
+時間範囲刈り込みと書き込み分散を両立できますが、パーティション数、メタデータ、小規模パーティションを増やします。
 
-## routing
+## 振り分け
 
-### client-side routing
+### クライアント側振り分け
 
-Client libraryがpartition mapを持ち、直接target nodeへ送ります。
+クライアントライブラリがパーティションマップを持ち、直接対象ノードへ送ります。
 
-- Hopが少ない
-- Client更新とmetadata refreshが必要
-- 多言語clientでlogicが分散
+- 中継回数が少ない
+- クライアント更新とメタデータ更新が必要
+- 多言語クライアント側へ処理が分散
 
-### proxy/coordinator routing
+### プロキシ/調整役振り分け
 
-Gatewayがkeyからtargetを選びます。
+ゲートウェイがキーから対象を選びます。
 
-- Clientが単純
-- Proxyのlatency/bottleneck
-- Metadataを中央管理しやすい
+- クライアントが単純
+- プロキシの遅延時間/ボトルネック
+- メタデータを中央管理しやすい
 
-### redirect
+### リダイレクト
 
-任意nodeがrequestを受け、正しいownerへredirect/forwardします。Stale partition mapでも動けますが追加hopがあります。
+任意ノードがリクエストを受け、正しい所有者へリダイレクト/転送します。古いパーティションマップでも動けますが追加中継回数があります。
 
-Partition mapにはversion/epochを付け、古いrouterによる誤writeを防ぎます。
+パーティションマップにはバージョン/世代を付け、古いルーターによる誤書き込みを防ぎます。
 
-## partition pruning
+## パーティション刈り込み
 
-Query predicateから不要partitionを除外します。
+クエリ述語から不要パーティションを除外します。
 
 ```sql
 SELECT *
@@ -233,279 +233,279 @@ WHERE ordered_at >= DATE '2026-08-01'
   AND ordered_at <  DATE '2026-09-01';
 ```
 
-ordered_at range partitionならAugust partitionだけ読めます。
+ordered_at範囲パーティションなら8月パーティションだけ読めます。
 
-Pruningを妨げる例：
+刈り込みを妨げる例：
 
-- Partition keyへfunctionを適用
-- Type/collation mismatch
-- Runtimeまで値が不明
+- パーティションキーへ関数を適用
+- 型/照合順序の不一致
+- 実行時まで値が不明
 - OR条件
-- Partition keyを含まないpredicate
+- パーティションキーを含まない述語
 
-Static pruningとruntime/dynamic pruningを持つoptimizerがあります。
+静的刈り込みと実行時/動的刈り込みを持つ最適化器があります。
 
-## scatter-gather
+## 分散問い合わせと集約
 
-Target shardを一つに絞れないqueryは全shardへ送ります。
+対象シャードを一つに絞れないクエリは全シャードへ送ります。
 
 ```mermaid
 flowchart TB
-    Q["Global query"] --> S1["Shard 1"]
-    Q --> S2["Shard 2"]
-    Q --> S3["Shard 3"]
-    S1 --> M["Merge"]
+    Q["全体クエリ"] --> S1["シャード1"]
+    Q --> S2["シャード2"]
+    Q --> S3["シャード3"]
+    S1 --> M["マージ"]
     S2 --> M
     S3 --> M
 ```
 
-Latencyは最も遅いshardに引きずられ、request fan-outがsystem loadを増幅します。
+遅延時間は最も遅いシャードに引きずられ、リクエスト分岐数がシステム負荷を増幅します。
 
 ```text
-100 API requests
-× 100 shards
-= 10,000 shard requests
+100回のAPI要求
+× 100シャード
+= 10,000回のシャード要求
 ```
 
-ORDER BY + LIMITでは各shardからlocal top-Kを取り、coordinatorでmergeできます。GROUP BYではpartial aggregateをmergeします。
+ORDER BY + 上限では各シャードからローカル上位K件を取り、調整役でマージできます。GROUP BYでは部分集約をマージします。
 
-## co-location
+## コロケーション
 
-関連dataを同じpartition keyで配置するとlocal join/transactionにできます。
+関連データを同じパーティションキーで配置すると局所結合/トランザクションにできます。
 
 ```text
-customers partitioned by customer_id
-orders    partitioned by customer_id
-payments  partitioned by customer_id
+customersをcustomer_idで分割
+ordersをcustomer_idで分割
+paymentsをcustomer_idで分割
 ```
 
-ただしproduct inventoryはproduct_idで分けたいかもしれません。一つのplacementで全access patternをlocalにできないため、duplicate/derived viewまたはdistributed operationが必要です。
+ただし商品在庫はproduct_idで分けたいかもしれません。一つの配置で全アクセスパターンを局所にできないため、重複/派生ビューまたは分散操作が必要です。
 
-## local secondary index
+## 局所セカンダリインデックス
 
-各shard内だけのsecondary indexです。Index entryとbase rowが同じshardにあり、writeをlocal transactionで更新できます。
+各シャード内だけのセカンダリインデックスです。インデックス項目と基底行が同じシャードにあり、書き込みを局所トランザクションで更新できます。
 
-Index keyだけでqueryすると全shardを検索する必要があります。
+インデックスキーだけでクエリすると全シャードを検索する必要があります。
 
 ```sql
 SELECT * FROM users WHERE email = 'a@example.com';
 ```
 
-Usersがuser_id hash shardで、emailからshardが分からなければscatterです。
+usersがuser_idによるハッシュシャードに分かれ、メールから対象シャードが分からなければ、全シャードへの散布検索が必要です。
 
-## global secondary index
+## グローバルセカンダリインデックス
 
-全shardを横断するindexを別partitioned structureとして持ちます。
+全シャードを横断するインデックスを別の分割構造として持ちます。
 
 ```mermaid
 flowchart LR
-    E["email"] --> G["Global index shard"]
-    G --> U["Base user shard"]
+    E["メール"] --> G["全体インデックスシャード"]
+    G --> U["基底利用者シャード"]
 ```
 
 利点：
 
-- Secondary keyからtarget shardを特定
-- Global uniquenessを実現しやすい
+- 副系キーから対象シャードを特定
+- 全体一意性を実現しやすい
 
 課題：
 
-- Base writeとindex writeが別shard
-- Distributed transactionまたはasync propagation
-- Stale index
-- Index hotspot
-- Repartition時の整合
+- 基底書き込みとインデックス書き込みが別シャード
+- 分散トランザクションまたは非同期伝播
+- 古いインデックス
+- インデックス集中箇所
+- 再分割時の整合
 
-Synchronous global indexはwrite latencyとavailabilityを犠牲にし、asynchronous indexはread-after-writeとdangling entryを扱います。
+同期全体インデックスは書き込み遅延時間と可用性を犠牲にし、非同期インデックスは書き込み後の読み取り保証と孤立項目を扱います。
 
-## global uniqueness
+## 全体一意性
 
-Emailなどを全shardでUNIQUEにするには：
+メールなどを全シャードでUNIQUEにするには：
 
-- Emailでpartitionしたglobal index
-- Central allocation service
-- Deterministic owner shard
-- Reservation protocol
+- メールでパーティションした全体インデックス
+- 中央割り当てサービス
+- 決定論的所有者シャード
+- 予約プロトコル
 
-各user shardでlocal UNIQUEを置くだけでは、別shardに同じemailを作れます。
+各利用者シャードで局所UNIQUEを置くだけでは、別シャードに同じメールを作れます。
 
-## data skewとhotspot
+## データ偏りと集中箇所
 
-### data skew
+### データ偏り
 
-Row/byte数が特定partitionへ偏ります。
+行/バイト数が特定パーティションへ偏ります。
 
-### load skew
+### 負荷偏り
 
-Data量は均等でもrequestが偏ります。
+データ量は均等でもリクエストが偏ります。
 
-### temporal hotspot
+### 一時的な集中箇所
 
-Campaignやcelebrity eventで一時的に特定keyがhotになります。
+キャンペーンや著名人に起因するイベントで一時的に特定キーが高負荷になります。
 
 観測するもの：
 
-- Partitionごとのrow/byte
-- Read/write QPS
-- CPU/I/O/network
-- Queue/latency
-- Compaction/replication lag
-- Top keys/tenants
+- パーティションごとの行/バイト
+- 読み取り/書き込みQPS
+- CPU/I/O/ネットワーク
+- キュー/遅延時間
+- コンパクション/レプリケーション遅延
+- 高負荷キー／テナント
 
-Average node使用率はhot partitionを隠します。
+平均ノード使用率は高負荷パーティションを隠します。
 
-## hotspot対策
+## 集中箇所対策
 
-- Hot keyをsaltして複数bucketへ分ける
-- Read cache/replica
-- Write aggregation/batching
-- Dedicated shard
-- Tenant rate limit
-- Adaptive repartition
-- Key設計変更
+- 高負荷キーをソルトして複数バケットへ分ける
+- 読み取りキャッシュ/レプリカ
+- 書き込み集約/一括処理
+- 専用シャード
+- テナント流量制限
+- 適応的な再分割
+- キー設計変更
 
-Saltはwriteを分散しますが、readで複数bucketをmergeし、uniquenessやorderingを複雑にします。
+ソルトは書き込みを分散しますが、読み取りで複数バケットをマージし、一意性や順序付けを複雑にします。
 
-Counterを16bucketへ分ける例：
+カウンターを16バケットへ分ける例：
 
 ```text
 counter_id = post42#0 ... post42#15
-total = SUM(all buckets)
+合計 = 全バケットのSUM
 ```
 
-Exact current valueを読むcostとeventual aggregationを受け入れます。
+正確な現在の値を読むコストと結果整合的な集約を受け入れます。
 
-## splitとmerge
+## 分割とマージ
 
-Range partitionが大きくなったらsplitします。
+範囲パーティションが大きくなったら分割します。
 
 ```text
 [A, Z)
 → [A, M) + [M, Z)
 ```
 
-Small partitionが増えすぎたらmergeします。Split/mergeはmetadata更新、replica作成、routing change、in-flight requestを調整します。
+小規模パーティションが増えすぎたらマージします。分割/マージはメタデータ更新、レプリカ作成、振り分け変更、処理中のリクエストを調整します。
 
-## online rebalancing
+## オンライン再均衡化
 
-PartitionをNode AからBへ移動する流れの一例：
+パーティションをノードAからBへ移動する流れの一例：
 
-1. Bへsnapshotをcopy
-2. Copy中のincremental logを転送
+1. Bへスナップショットを複製
+2. 複製中の増分ログを転送
 3. BがAへ追いつく
-4. Ownership epochを変更
-5. New requestをBへroute
-6. Old Aへのrequestをredirect/reject
-7. 安全確認後Aのcopyを削除
+4. 所有権世代を変更
+5. 新しいリクエストをBへ振り分け
+6. 古いAへのリクエストをリダイレクト/拒否
+7. 安全確認後Aの複製を削除
 
 ```mermaid
 sequenceDiagram
-    participant Router
-    participant A as Old owner A
-    participant B as New owner B
-    A->>B: snapshot
-    A->>B: incremental changes
-    B-->>A: caught up
-    Router->>Router: epoch 7 → 8, owner=B
-    Router->>B: new writes
-    A-->>Router: redirect / stale epoch
+    participant Router as ルーター
+    participant A as 古い所有者A
+    participant B as 新しい所有者B
+    A->>B: スナップショット
+    A->>B: 増分変更
+    B-->>A: 追従完了
+    Router->>Router: 世代7 → 8, 所有者=B
+    Router->>B: 新しい書き込み
+    A-->>Router: リダイレクト / 古い世代
 ```
 
-### dual writeの危険
+### 二重書き込みの危険
 
-Migration中にapplicationがA/Bへ個別にdual writeすると、一方だけ成功するpartial failureが起きます。
+移行中にアプリケーションがA/Bへ個別に二重書き込みすると、一方だけ成功する部分障害が起きます。
 
-Ownerがlogを一つに順序づけ、new replicaへ複製する方式や、transaction/CDCで移行します。Cutoverにはepoch/fencing tokenを使い、old ownerのlate writeを拒否します。
+所有者がログを一つに順序づけ、新しいレプリカへ複製する方式や、トランザクション/CDCで移行します。切り替えには世代/フェンシングトークンを使い、古い所有者の遅れて到着した書き込みを拒否します。
 
-## resharding cost
+## 再シャーディングコスト
 
-Data移動はbackground loadとしてproduction trafficと競合します。
+データ移動はバックグラウンド負荷として本番環境通信量と競合します。
 
-- Disk read/write
-- Network bandwidth
-- Compaction
-- Replica catch-up
-- Cache coldness
-- Checksum verification
+- ディスク読み取り/書き込み
+- ネットワーク帯域幅
+- コンパクション
+- レプリカ追従
+- キャッシュ未温状態
+- チェックサム検証
 
-Rate limitとpriorityを設定し、failure時にresumeできるcopy protocolが必要です。
+流量制限と優先度を設定し、障害時に再開できる複製プロトコルが必要です。
 
-## distributed query execution
+## 分散クエリ実行
 
-Distributed planにはexchange operatorが加わります。
+分散計画には交換演算子が加わります。
 
-### gather
+### 集約
 
-各worker resultをcoordinatorへ集めます。
+各ワーカー 結果を調整役へ集めます。
 
-### broadcast
+### ブロードキャスト
 
-Small tableを全workerへ送ります。
+小規模表を全ワーカーへ送ります。
 
-### repartition
+### 再分割
 
-Join/group keyで両入力をnetwork shuffleします。
+結合/グループキーで両入力をネットワーク再分配します。
 
 ```mermaid
 flowchart LR
-    A1["Shard A1"] --> X["Hash exchange"]
-    A2["Shard A2"] --> X
-    X --> W1["Worker 1"]
-    X --> W2["Worker 2"]
+    A1["シャードA1"] --> X["ハッシュ交換"]
+    A2["シャードA2"] --> X
+    X --> W1["ワーカー 1"]
+    X --> W2["ワーカー 2"]
 ```
 
-Network byte、serialization、backpressure、worker skewがcost modelへ加わります。
+ネットワークバイト、直列化、逆圧、ワーカー 偏りがコストモデルへ加わります。
 
-## shard数を決める
+## シャード数を決める
 
-多すぎるshard：
+多すぎるシャード：
 
-- Metadataとconnection増加
-- Small file/compaction overhead
-- Fan-out増加
-- Rebalance operation増加
+- メタデータと接続増加
+- 小規模ファイル/コンパクションオーバーヘッド
+- 分岐数増加
+- 再均衡化操作増加
 
-少なすぎるshard：
+少なすぎるシャード：
 
-- 1 shardがnode capacityを超える
-- Parallelism不足
+- 1シャードがノード容量を超える
+- 並列度不足
 - 移動単位が大きい
-- Hotspotを分割しにくい
+- 集中箇所を分割しにくい
 
-将来のgrowthを見込みつつ、virtual partition/range splitでphysical node数と独立させます。
+将来の増加傾向を見込みつつ、仮想パーティション/範囲分割で物理ノード数と独立させます。
 
 ## よくある誤解
 
-### 「hash shardなら均等になる」
+### 「ハッシュシャードなら均等になる」
 
-Key数は均等でもrequest frequency、row size、tenant sizeが偏ります。
+キー数は均等でもリクエスト頻度、行大きさ、テナント大きさが偏ります。
 
-### 「shard keyは後から変えればよい」
+### 「シャードキーは後から変えればよい」
 
-全data移動、index再構築、routing、foreign key、application queryを巻き込む大規模migrationです。
+全データ移動、インデックス再構築、振り分け、外部キー、アプリケーションクエリを巻き込む大規模移行です。
 
-### 「global indexがあればsharding前と同じ」
+### 「全体インデックスがあればシャーディング前と同じ」
 
-Base/indexのdistributed writeとstalenessが加わり、transaction semanticsが変わります。
+基底/インデックスの分散書き込みと古さが加わり、トランザクション意味論が変わります。
 
 ## まとめ
 
-- Horizontal partitionはrow、vertical partitionはcolumn/機能を分ける
-- Rangeはlocality、hashはload distributionを得やすい
-- Shard keyはquery routing、transaction boundary、co-location、skewを同時に決める
-- Partition pruningできないqueryはscatter-gatherでfan-outする
-- Local indexはwriteが単純、global indexはlookupを改善するがdistributed consistencyを必要とする
-- Data skewとload skewをpartition単位で観測する
-- Online rebalancingはsnapshot、incremental catch-up、epoch cutover、old owner fencingを行う
-- Distributed queryはbroadcast/repartition/gatherのnetwork costを持つ
+- 水平パーティションは行、垂直パーティションは列/機能を分ける
+- 範囲は局所性、ハッシュは負荷分布を得やすい
+- シャードキーはクエリ振り分け、トランザクション境界、コロケーション、偏りを同時に決める
+- パーティション刈り込みできないクエリは分散問い合わせと集約で分岐数する
+- 局所インデックスは書き込みが単純、全体インデックスは参照を改善するが分散整合性を必要とする
+- データ偏りと負荷偏りをパーティション単位で観測する
+- オンライン再均衡化はスナップショット、増分追従、世代切り替え、古い所有者フェンシングを行う
+- 分散クエリはブロードキャスト/再分割/集約のネットワークコストを持つ
 
 ## 確認問題
 
-1. Rangeとhash partitioningを時系列queryとwrite hotspotから比較してください。
-2. customer_id shardが顧客別queryに向き、全体reportに不利な理由を説明してください。
-3. Local secondary indexとglobal secondary indexのwrite pathを比較してください。
-4. Online migrationでapplication dual writeが危険な理由は何ですか。
-5. Hashでrow数が均等でもhot shardが生まれる例を作ってください。
+1. 範囲とハッシュ分割を時系列クエリと書き込み集中箇所から比較してください。
+2. customer_id シャードが顧客別クエリに向き、全体レポートに不利な理由を説明してください。
+3. 局所セカンダリインデックスとグローバルセカンダリインデックスの書き込み経路を比較してください。
+4. オンライン移行でアプリケーション二重書き込みが危険な理由は何ですか。
+5. ハッシュで行数が均等でも高負荷シャードが生まれる例を作ってください。
 
 ## 参考資料
 
@@ -514,4 +514,4 @@ Base/indexのdistributed writeとstalenessが加わり、transaction semantics�
 - [James C. Corbett et al., “Spanner: Google’s Globally-Distributed Database”](https://doi.org/10.1145/2491245)
 - [Dynamo Paper](https://doi.org/10.1145/1294261.1294281)
 
-次章では、複数shard/serviceにまたがる変更をall-or-nothingまたは補償可能なworkflowとして扱う分散transactionを学びます。
+次章では、複数シャード/サービスにまたがる変更を全か無かまたは補償可能なワークフローとして扱う分散トランザクションを学びます。

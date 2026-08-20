@@ -1,421 +1,421 @@
 ---
 title: 12. WALとクラッシュリカバリ
-description: WAL、LSN、checkpoint、redo/undo、ARIES、backup、PITRによる障害回復を理解する。
+description: WAL、LSN、チェックポイント、再実行/取り消し、ARIES、バックアップ、PITRによる障害回復を理解する。
 sidebar:
   order: 12
   label: 12. WALとクラッシュリカバリ
 ---
 
-DBMSは更新のたびにdata page本体を同期書き込みすると、storage latencyでthroughputが制限されます。一方、memory上のdirty pageだけを更新してCOMMITを返すと、crashで結果を失います。
+DBMSが更新のたびにデータページ本体を同期的に書き込むと、ストレージ遅延によって処理量が制限されます。一方、メモリ上の未書き出しページだけを更新してコミットを返すと、クラッシュで結果を失います。
 
-Write-Ahead Logging（WAL）は、変更の記録をdata pageより先に永続化し、高速なcommitとcrash recoveryを両立させます。
+先行書き込みログ（WAL）は、変更の記録をデータページより先に永続化し、高速なコミットとクラッシュ復旧を両立させます。
 
 ## この章で答える問い
 
-- WALのwrite-ahead ruleは何を要求するのか
-- Commit時にdata page本体を書かなくてもDurabilityを保てるのはなぜか
-- Steal/no-steal、force/no-forceでredoとundoの必要性はどう変わるのか
-- Checkpointは何を短縮し、なぜWALを不要にしないのか
-- ARIESのanalysis、redo、undoは何を行うのか
-- BackupとPITRはcrash recoveryとどう違うのか
+- WALの先行書き込み規則は何を要求するのか
+- コミット時にデータページ本体を書かなくても永続性を保てるのはなぜか
+- スティール/スティールなし、フォース/フォースなしで再実行と取り消しの必要性はどう変わるのか
+- チェックポイントは何を短縮し、なぜWALを不要にしないのか
+- ARIESの分析、再実行、取り消しは何を行うのか
+- バックアップとPITRはクラッシュ復旧とどう違うのか
 
-## memory更新とcrash
+## メモリ更新とクラッシュ
 
-Buffer Poolで次の状態を考えます。
+バッファプールで次の状態を考えます。
 
 ```text
-Transaction T1: COMMIT済み
-Page 42: memoryではnew value、data fileはold value
+トランザクションT1: コミット済み
+ページ42: メモリでは新しい値、データファイルは古い値
 ```
 
-このままprocessがcrashするとmemory上のnew valueは失われます。COMMIT成功を返しているため、再起動時にnew valueを復元しなければDurability違反です。
+このまま処理がクラッシュするとメモリ上の新しい値は失われます。コミット成功を返しているため、再起動時に新しい値を復元しなければ永続性違反です。
 
-逆に未commitのT2が変更したdirty pageをdata fileへ書き出してからcrashした場合、再起動時にその変更を取り消さなければAtomicity違反です。
+逆に未コミットのT2が変更した未書き出しページをデータファイルへ書き出してからクラッシュした場合、再起動時にその変更を取り消さなければ原子性違反です。
 
-Recoveryは次の二つを扱います。
+復旧は次の二つを扱います。
 
-- **redo**：commit済みだがdata pageへ未反映の変更を再適用する
-- **undo**：未commitだがdata pageへ反映された変更を取り消す
+- **再実行**：コミット済みだがデータページへ未反映の変更を再適用する
+- **取り消し**：未コミットだがデータページへ反映された変更を取り消す
 
 ## WALの原則
 
-Write-aheadには二つの重要な順序があります。
+先行書き込みには二つの重要な順序があります。
 
-1. Dirty data pageをstorageへ書く前に、そのpage変更を復旧できるlog recordを永続化する
-2. COMMIT成功を返す前に、そのtransactionのcommitに必要なlogを永続化する
+1. 未書き出しデータページをストレージへ書く前に、そのページ変更を復旧できるログレコードを永続化する
+2. コミット成功を返す前に、そのトランザクションのコミットに必要なログを永続化する
 
 ```mermaid
 sequenceDiagram
-    participant App
-    participant BP as Buffer Pool
+    participant App as アプリケーション
+    participant BP as バッファプール
     participant WAL
-    participant Disk
+    participant Disk as 永続ストレージ
 
-    App->>BP: UPDATE page 42
-    BP->>WAL: append update record
-    App->>WAL: COMMIT
-    WAL->>Disk: flush WAL through commit LSN
-    Disk-->>App: durable
-    Note over BP,Disk: data page 42は後からwrite可能
+    App->>BP: UPDATEページ42
+    BP->>WAL: 更新ログレコードを追記
+    App->>WAL: コミット
+    WAL->>Disk: コミットLSNまでWALを書き出し
+    Disk-->>App: 永続化完了
+    Note over BP,Disk: データページ42は後から書き込み可能
 ```
 
-Logはappend中心なので、複数のrandom data pageを同期writeするより効率的にcommitできます。
+ログは追記中心なので、複数のランダムなデータページを同期的に書き込むより効率よくコミットできます。
 
-## log record
+## ログレコード
 
-Log recordには実装に応じて次を含みます。
+ログレコードには実装に応じて次を含みます。
 
-- LSN（Log Sequence Number）
-- Transaction ID
-- Record type
-- 対象page/record
-- redo情報
-- undo情報
-- 前のtransaction logへのpointer
-- commit/abort/checkpoint情報
+- LSN（ログシーケンス番号）
+- トランザクションID
+- レコード型
+- 対象ページ/レコード
+- 再実行情報
+- 取り消し情報
+- 前のトランザクションログへのポインター
+- コミット/中止/チェックポイント情報
 
-### physical log
+### 物理ログ
 
-「page 42のoffset 120をold bytesからnew bytesへ変更」のように物理byte差を記録します。Redo/undoが直接的ですが、page formatへ依存します。
+「ページ42のオフセット120を古いバイトから新しいバイトへ変更」のように物理バイト差を記録します。再実行/取り消しが直接的ですが、ページ形式へ依存します。
 
-### logical log
+### 論理ログ
 
-「key=7へrecordをinsert」のように論理operationを記録します。Compactで構造変更に柔軟な場合がありますが、recovery時にdata structure操作が必要です。
+「キー=7へレコードを挿入」のように論理操作を記録します。コンパクトで構造変更に柔軟な場合がありますが、復旧時にデータ構造操作が必要です。
 
-### physiological log
+### 生理的ログ
 
-Pageは物理的に指定し、page内operationは論理的に記録します。ARIESで使われる考え方です。
+ページは物理的に指定し、ページ内操作は論理的に記録します。ARIESで使われる考え方です。
 
-実DBMSはoperation種類に応じて組み合わせます。
+実DBMSは操作種類に応じて組み合わせます。
 
 ## LSN
 
-LSNはWAL内の位置・順序を表します。Page headerにもpage LSNを持たせ、どのlog recordまで反映済みか記録します。
+LSNはWAL内の位置・順序を表します。ページヘッダーにもページLSNを持たせ、どのログレコードまで反映済みか記録します。
 
 ```text
-log record LSN = 1200
-page LSN       = 1250
+ログレコードLSN = 1200
+ページLSN       = 1250
 
-→ pageにはLSN 1200の変更がすでに反映済み
+→ ページにはLSN 1200の変更がすでに反映済み
 ```
 
-Redo時にpage LSN >= log LSNなら、そのrecordを再適用せずskipできます。Recoveryをidempotentに近づけます。
+再実行時にページLSN >= ログLSNなら、そのレコードを再適用せずスキップできます。復旧を冪等に近づけます。
 
-Buffer Managerがpageをwriteする前に、WALが少なくともpage LSNまでflush済みであることを確認します。
+バッファ管理機構がページを書き込む前に、WALが少なくともページLSNまで書き出し済みであることを確認します。
 
-## transaction log chain
+## トランザクションログ連鎖
 
-各transactionのlog recordをprevLSNでchainすると、rollback時にそのtransactionの変更だけを逆順にたどれます。
+各トランザクションのログレコードをprevLSNで連鎖すると、ロールバック時にそのトランザクションの変更だけを逆順にたどれます。
 
 ```mermaid
 flowchart LR
     L100["LSN 100<br/>T1 UPDATE A"] --> L140["LSN 140<br/>T1 UPDATE B"]
-    L140 --> L190["LSN 190<br/>T1 COMMIT"]
+    L140 --> L190["LSN 190<br/>T1コミット"]
 ```
 
-Global WALでは複数transactionがinterleaveしていますが、transaction chainでundo対象を追跡できます。
+全体WALでは複数トランザクションが交互配置していますが、トランザクション連鎖で取り消し対象を追跡できます。
 
-## group commit
+## グループコミット
 
-各transactionが別々にfsyncすると、1 commitにつきstorage latencyを支払います。Group commitは近い時刻のcommit recordを一度のWAL flushへまとめます。
+各トランザクションが別々にfsyncすると、1コミットにつきストレージ遅延時間を支払います。グループコミットは近い時刻のコミットレコードを一度のWAL書き出しへまとめます。
 
 ```mermaid
 flowchart TB
-    T1["T1 COMMIT"] --> Batch["WAL flush batch"]
-    T2["T2 COMMIT"] --> Batch
-    T3["T3 COMMIT"] --> Batch
-    Batch --> Fsync["one fsync"]
+    T1["T1コミット"] --> Batch["WAL書き出し一括"]
+    T2["T2コミット"] --> Batch
+    T3["T3コミット"] --> Batch
+    Batch --> Fsync["1回のfsync"]
 ```
 
-個々のtransactionは少しbatchを待つ可能性がありますが、throughputを大きく改善できます。
+個々のトランザクションは少し一括を待つ可能性がありますが、処理量を大きく改善できます。
 
-WAL buffer size、commit delay、storage latency、concurrencyがbatch効率へ影響します。
+WALバッファ大きさ、コミット遅延、ストレージ遅延時間、同時実行性が一括効率へ影響します。
 
-## force/no-force、steal/no-steal
+## フォース/フォースなし、スティール/スティールなし
 
-### force
+### フォース
 
-COMMIT時にtransactionが変更したdata pageをすべて永続化します。Commit済み変更のredoは不要になりやすい一方、random I/Oを待つため遅くなります。
+コミット時にトランザクションが変更したデータページをすべて永続化します。コミット済み変更の再実行は不要になりやすい一方、ランダムI/Oを待つため遅くなります。
 
-### no-force
+### フォースなし
 
-COMMIT時にdata page本体のwriteを要求しません。高速ですが、crash時にcommit済み変更のredoが必要です。
+コミット時にデータページ本体の書き込みを要求しません。高速ですが、クラッシュ時にコミット済み変更の再実行が必要です。
 
-### steal
+### スティール
 
-Buffer Managerは未commit transactionのdirty pageをstorageへ書き出せます。Buffer Poolを柔軟に置換できますが、crash時にundoが必要です。
+バッファ管理機構は未コミットトランザクションの未書き出しページをストレージへ書き出せます。バッファプールを柔軟に置換できますが、クラッシュ時に取り消しが必要です。
 
-### no-steal
+### スティールなし
 
-未commit dirty pageをstorageへ書きません。Undoは不要になりやすい一方、large transactionの全dirty pageをmemoryへ保持する必要があります。
+未コミット未書き出しページをストレージへ書きません。取り消しは不要になりやすい一方、大規模トランザクションの全未書き出しページをメモリへ保持する必要があります。
 
-| Policy | Recoveryへの影響 |
+| 方針 | 復旧への影響 |
 | --- | --- |
-| force + no-steal | redo/undoを減らせるがruntime costが高い |
-| no-force + no-steal | redoが必要 |
-| force + steal | undoが必要 |
-| no-force + steal | redoとundoが必要、柔軟で一般的 |
+| フォース + スティールなし | 再実行/取り消しを減らせるが実行時コストが高い |
+| フォースなし + スティールなし | 再実行が必要 |
+| フォース + スティール | 取り消しが必要 |
+| フォースなし + スティール | 再実行と取り消しが必要、柔軟で一般的 |
 
-WAL + ARIES系はno-force/stealを可能にし、高いconcurrencyとBuffer Pool利用効率を得ます。
+WAL + ARIES系はフォースなし/スティールを可能にし、高い同時実行性とバッファプール利用効率を得ます。
 
-## checkpoint
+## チェックポイント
 
-WALをsystem開始時からすべてscanするとrecoveryが長くなります。Checkpointは、recovery開始点を新しくするための状態を記録します。
+WALをシステム開始時からすべて走査すると復旧が長くなります。チェックポイントは、復旧開始点を新しくするための状態を記録します。
 
 記録する例：
 
-- active transaction
-- dirty page table
+- 実行中トランザクション
+- 未書き出しページ表
 - WAL位置
-- flush済みpage
+- 書き出し済みページ
 
-### sharp checkpoint
+### 静止点チェックポイント
 
-処理を止め、全dirty pageを書き、整合した一点を作ります。Recoveryは単純ですが、停止とI/O spikeが大きくなります。
+処理を止め、全未書き出しページを書き、整合した一点を作ります。復旧は単純ですが、停止とI/O急増が大きくなります。
 
-### fuzzy checkpoint
+### ファジーチェックポイント
 
-Transactionを継続しながらcheckpoint情報をlogへ書き、dirty pageをbackgroundでflushします。
+トランザクションを継続しながらチェックポイント情報をログへ書き、未書き出しページをバックグラウンドで書き出しします。
 
 ```mermaid
 sequenceDiagram
-    participant Tx as Transactions
-    participant CK as Checkpointer
+    participant Tx as トランザクション
+    participant CK as チェックポイント処理
     participant WAL
-    participant BP as Buffer Pool
-    Tx->>WAL: updates continue
-    CK->>WAL: checkpoint begin / state
-    CK->>BP: dirty pagesを徐々にflush
-    Tx->>WAL: updates continue
-    CK->>WAL: checkpoint end
+    participant BP as バッファプール
+    Tx->>WAL: 更新を継続
+    CK->>WAL: チェックポイント開始／状態
+    CK->>BP: 未書き出しページを徐々に書き出し
+    Tx->>WAL: 更新を継続
+    CK->>WAL: チェックポイント終了
 ```
 
-Fuzzy checkpoint中にもpageは更新されるため、checkpointだけで完全なdata snapshotにはなりません。Recoveryはcheckpoint時点のdirty/active情報と後続WALを使います。
+ファジーチェックポイント中にもページは更新されるため、チェックポイントだけで完全なデータスナップショットにはなりません。復旧はチェックポイント時点の未書き出し/実行中情報と後続WALを使います。
 
-Checkpoint頻度のtrade-off：
+チェックポイント頻度のトレードオフ：
 
-- 頻繁：recovery WALは短くなるがruntime I/O増加
-- 低頻度：runtime writeは平準化しやすいがrecovery時間とWAL保持量増加
+- 頻繁：復旧WALは短くなるが実行時I/O増加
+- 低頻度：実行時書き込みは平準化しやすいが復旧時間とWAL保持量増加
 
-## crash recovery
+## クラッシュ復旧
 
-Crash後の目的は、一貫したtransaction状態を持つDBへ戻すことです。
+クラッシュ後の目的は、一貫したトランザクション状態を持つDBへ戻すことです。
 
 単純化すると：
 
-1. Checkpointからactive transactionとdirty pageを復元する
-2. WALを進みcommit済み変更をredoする
-3. Crash時未完了transactionをundoする
-4. Recovery完了後に通常serviceを開始する
+1. チェックポイントから実行中トランザクションと未書き出しページを復元する
+2. WALを進みコミット済み変更を再実行する
+3. クラッシュ時に未完了だったトランザクションを取り消す
+4. 復旧完了後に通常サービスを開始する
 
-Redoは「commit済みだけ」ではなく、history repeatingとして未commit変更も含めて一度再現し、その後undoするARIES設計があります。
+ARIESでは、再実行時に未コミット変更も含めて履歴を一度再現し、その後で未完了トランザクションを取り消します。
 
 ## ARIES
 
-ARIESはAlgorithm for Recovery and Isolation Exploiting Semanticsの略で、steal/no-force環境の代表的recovery algorithmです。
+ARIESは「復旧と分離性の意味論を活用するアルゴリズム」の略で、スティール/フォースなし環境の代表的復旧アルゴリズムです。
 
-### 1. Analysis
+### 1. 分析
 
-最後のcheckpointからlogをscanし、次を再構築します。
+最後のチェックポイントからログを走査し、次を再構築します。
 
-- Transaction table：active transactionとlastLSN
-- Dirty page table：dirty pageと最初にdirtyになったrecLSN
-- Winner/loser transaction
+- トランザクション表：実行中トランザクションと直前のLSN
+- 未書き出しページ表：未書き出しページと最初に未書き出しになったrecLSN
+- 完了/未完了トランザクション
 
-Winnerはcommit済み、loserはcrash時未完了です。
+完了はコミット済み、未完了はクラッシュ時未完了です。
 
-### 2. Redo
+### 2. 再実行
 
-Dirty page tableの最小recLSN付近からlogをforward scanし、必要な変更を再適用します。
+未書き出しページ表の最小recLSN付近からログを前向きに走査し、必要な変更を再適用します。
 
-Redo条件では次を確認します。
+再実行条件では次を確認します。
 
-- Pageがdirty page tableにあるか
-- log LSNがrecLSN以降か
-- page LSNがlog LSNより古いか
+- ページが未書き出しページ表にあるか
+- ログLSNがrecLSN以降か
+- ページLSNがログLSNより古いか
 
-Page LSNがすでに新しければskipします。
+ページLSNがすでに新しければスキップします。
 
-### 3. Undo
+### 3. 取り消し
 
-Loser transactionのlog chainをlastLSNから逆にたどり、変更を取り消します。
-
-```mermaid
-flowchart LR
-    Analysis["Analysis<br/>状態を再構築"] --> Redo["Redo<br/>historyをrepeat"]
-    Redo --> Undo["Undo<br/>loserをrollback"]
-    Undo --> Ready["DB ready"]
-```
-
-## Compensation Log Record
-
-Undo操作自体もcrashする可能性があります。Compensation Log Record（CLR）は「どの変更をundoしたか」と「次にどこをundoするか」をWALへ記録します。
-
-Recovery中に再crashしても、CLRをredoして完了済みundoを繰り返さず、残りから再開できます。
-
-CLR自体はundoしません。Undoのundoを延々繰り返さないためです。
-
-## idempotent redo
-
-Recoveryは途中で再crashしても安全に再実行できる必要があります。
-
-Page LSNやrecord metadataで、同じlog recordを二重適用しないようにします。Operationが数学的にidempotentでなくても、適用済み判定によってrecovery procedureをrepeatableにできます。
-
-## crash failureとmedia failure
-
-### crash failure
-
-Memoryを失うがdata fileとWAL storageは利用可能です。Local WALで回復できます。
-
-例：
-
-- DB process crash
-- OS crash
-- power loss後にstorageが正常
-
-### media failure
-
-Data fileやWAL自体を失う・破損する障害です。Local recoveryだけでは戻せません。
-
-例：
-
-- disk loss
-- filesystem corruption
-- accidental DROP
-- ransomware
-
-Backup、replica、archive WALが必要です。
-
-## backup
-
-### logical backup
-
-SQLやlogical row形式でexportします。
-
-利点：
-
-- Object/table単位でrestoreしやすい
-- 別version/architectureへ移行しやすい
-
-欠点：
-
-- Large DBで遅い
-- Restore時にindex再構築などが必要
-- Physical stateをそのまま戻さない
-
-### physical backup
-
-Data fileをphysical formatでcopyします。
-
-利点：
-
-- Large DBを速くrestoreしやすい
-- Cluster全体を同じphysical stateへ戻せる
-
-欠点：
-
-- DB version、platform、tablespace構成へ依存
-- Online copy中の一貫性にWALが必要
-
-Backupは「作成成功」だけでなくrestore testで検証します。
-
-## Point-in-Time Recovery
-
-Base backupへ、その後archiveしたWALを順にredoし、指定時刻/transaction直前まで復元します。
+未完了トランザクションのログ連鎖を直前のLSNから逆にたどり、変更を取り消します。
 
 ```mermaid
 flowchart LR
-    Base["Base backup<br/>Sunday"] --> W1["WAL Mon"]
-    W1 --> W2["WAL Tue"]
-    W2 --> Target["Target<br/>Tue 14:32:10"]
+    Analysis["分析<br/>状態を再構築"] --> Redo["再実行<br/>履歴を再現"]
+    Redo --> Undo["取り消し<br/>未完了をロールバック"]
+    Undo --> Ready["DB利用可能"]
 ```
 
-Accidental DELETEの直前へ戻せます。ただし復元先は通常別clusterとして立ち上げ、必要dataを抽出するか切り替えます。
+## 補償ログレコード
+
+取り消し操作自体もクラッシュする可能性があります。補償ログレコード（CLR）は「どの変更を取り消したか」と「次にどこを取り消すか」をWALへ記録します。
+
+復旧中に再クラッシュしても、CLRを再実行して完了済み取り消しを繰り返さず、残りから再開できます。
+
+CLR自体は取り消しません。取り消しの取り消しを延々繰り返さないためです。
+
+## 冪等な再実行
+
+復旧は途中で再クラッシュしても安全に再実行できる必要があります。
+
+ページLSNやレコードメタデータで、同じログレコードを二重適用しないようにします。操作が数学的に冪等でなくても、適用済み判定によって復旧手順を再実行可能にできます。
+
+## クラッシュ障害と媒体障害
+
+### クラッシュ障害
+
+メモリを失うがデータファイルとWALストレージは利用可能です。局所WALで回復できます。
+
+例：
+
+- DB処理クラッシュ
+- OSクラッシュ
+- 電源喪失後にストレージが正常
+
+### 媒体障害
+
+データファイルやWAL自体を失う・破損する障害です。局所復旧だけでは戻せません。
+
+例：
+
+- ディスク損失
+- ファイルシステム破損
+- 誤った削除操作
+- ランサムウェア
+
+バックアップ、レプリカ、WALアーカイブが必要です。
+
+## バックアップ
+
+### 論理バックアップ
+
+SQLや論理行形式で書き出しします。
+
+利点：
+
+- オブジェクト/表単位で復元しやすい
+- 別バージョン/アーキテクチャへ移行しやすい
+
+欠点：
+
+- 大規模DBで遅い
+- 復元時にインデックス再構築などが必要
+- 物理状態をそのまま戻さない
+
+### 物理バックアップ
+
+データファイルを物理形式で複製します。
+
+利点：
+
+- 大規模DBを速く復元しやすい
+- クラスター全体を同じ物理状態へ戻せる
+
+欠点：
+
+- DBバージョン、基盤、表領域構成へ依存
+- オンライン複製中の一貫性にWALが必要
+
+バックアップは「作成成功」だけでなく復元試験で検証します。
+
+## 時点復旧
+
+ベースバックアップへ、その後アーカイブしたWALを順に再実行し、指定時刻/トランザクション直前まで復元します。
+
+```mermaid
+flowchart LR
+    Base["ベースバックアップ<br/>日曜日"] --> W1["WAL 月曜日"]
+    W1 --> W2["WAL 火曜日"]
+    W2 --> Target["対象<br/>火曜日 14:32:10"]
+```
+
+誤削除の直前へ戻せます。ただし復元先は通常別クラスターとして立ち上げ、必要データを抽出するか切り替えます。
 
 PITRに必要：
 
-- 有効なbase backup
-- 連続したarchive WAL
-- Timeline/history情報
-- Recovery procedure
-- 十分なstorageとrestore時間
+- 有効なベースバックアップ
+- 連続したWALアーカイブ
+- 時系列/履歴情報
+- 復旧手順
+- 十分なストレージと復元時間
 
-WAL chainに欠損があるとその先へ進めません。
+WAL連鎖に欠損があるとその先へ進めません。
 
-## replicaとrecovery
+## レプリカと復旧
 
-Physical replicaはleaderのWALを受け取りredoして同じ状態を作れます。
+物理レプリカはリーダーのWALを受け取り再実行して同じ状態を作れます。
 
-Replicaはbackupの代替になりません。Accidental DELETEも複製され、corruptionやoperator errorが広がる可能性があります。
+レプリカはバックアップの代替になりません。誤削除も複製され、破損や運用者の操作ミスが広がる可能性があります。
 
 役割を分けます。
 
-- Replica：availability、read scaling、短いfailover
-- Backup/PITR：過去状態、operator error、media/corruption recovery
-- Archive/offline copy：failure domain分離
+- レプリカ：可用性、読み取りの負荷分散、短いフェイルオーバー
+- バックアップ/PITR：過去状態、運用者の操作ミス、媒体破損からの復旧
+- アーカイブ/オフライン複製：障害領域分離
 
-## checksumとcorruption
+## チェックサムと破損
 
-Page checksumはstorageから読んだpageが期待した内容か検出する助けになります。検出は修復ではありません。
+ページチェックサムはストレージから読んだページが期待した内容か検出する助けになります。検出は修復ではありません。
 
 破損対策：
 
-- page/WAL checksum
-- storage ECCとfilesystem protection
-- replica比較
-- periodic scrub
-- backup verification
-- restore drill
+- ページ/WALチェックサム
+- ストレージECCとファイルシステムの保護
+- レプリカ比較
+- 定期的な全体検査
+- バックアップ検証
+- 復元訓練
 
-Silent corruptionは通常queryを実行できているだけでは分からないことがあります。
+サイレントデータ破損は通常クエリを実行できているだけでは分からないことがあります。
 
 ## RPOとRTO
 
-- **RPO（Recovery Point Objective）**：どこまでのdata lossを許容するか
-- **RTO（Recovery Time Objective）**：どれだけの停止時間を許容するか
+- **RPO（復旧時点目標）**：どこまでのデータ損失を許容するか
+- **RTO（復旧時間目標）**：どれだけの停止時間を許容するか
 
 例：
 
 ```text
-RPO = 5 minutes
-RTO = 30 minutes
+RPO = 5分
+RTO = 30分
 ```
 
-Backup頻度だけでなくWAL archive遅延、replication mode、restore bandwidth、手順自動化が関係します。
+バックアップ頻度だけでなくWALアーカイブ遅延、レプリケーション方式、復元帯域幅、手順自動化が関係します。
 
 ## よくある誤解
 
-### 「checkpointがあればWALを削除できる」
+### 「チェックポイントがあればWALを削除できる」
 
-Replica、backup、PITR、未flush pageなどが必要とする位置までは保持が必要です。Checkpointだけで保持下限は決まりません。
+レプリカ、バックアップ、PITR、未書き出しページなどが必要とする位置までは保持が必要です。チェックポイントだけで保持下限は決まりません。
 
-### 「COMMIT成功時にはdata fileへrowが書かれている」
+### 「コミット成功時にはデータファイルへ行が書かれている」
 
-No-force WAL方式では、必要なWALがdurableならdata pageは後から書けます。
+フォースなしWAL方式では、必要なWALが永続化済みならデータページは後から書けます。
 
-### 「replicaがあるのでbackupは不要」
+### 「レプリカがあるのでバックアップは不要」
 
-Logical errorやdeleteも複製されます。過去へ戻るbackup/PITRは別の役割です。
+論理エラーや削除も複製されます。過去へ戻るバックアップ/PITRは別の役割です。
 
 ## まとめ
 
-- WALはdata pageより先にlogを永続化し、commit前に必要なlogをflushする
-- LSNとpage LSNでlog順序と適用済み変更を判断する
-- No-forceはredo、stealはundoを必要にする
-- Group commitは複数commitを一度のWAL flushへまとめる
-- Fuzzy checkpointはserviceを止めずにrecovery開始情報を記録する
-- ARIESはanalysis、redo、undoの三phaseでhistoryを回復する
-- CLRはundoの進捗をlog化し、recovery中の再crashへ備える
-- Crash recovery、replica、backup/PITRは異なるfailureを扱う
-- RPO/RTOはdata lossと復旧時間の目標を表す
+- WALはデータページより先にログを永続化し、コミット前に必要なログを書き出す
+- LSNとページLSNでログ順序と適用済み変更を判断する
+- フォースなしは再実行、スティールは取り消しを必要にする
+- グループコミットは複数コミットを一度のWAL書き出しへまとめる
+- ファジーチェックポイントはサービスを止めずに復旧開始情報を記録する
+- ARIESは分析、再実行、取り消しの三段階で履歴を回復する
+- CLRは取り消しの進捗をログ化し、復旧中の再クラッシュへ備える
+- クラッシュ復旧、レプリカ、バックアップ/PITRは異なる障害を扱う
+- RPO/RTOはデータ損失と復旧時間の目標を表す
 
 ## 確認問題
 
-1. WALの二つのwrite-ahead ruleを説明してください。
-2. No-force/stealでredoとundoの両方が必要になるscheduleを作ってください。
-3. Fuzzy checkpointがWALを不要にしない理由は何ですか。
-4. ARIESのanalysis、redo、undoで作る情報と処理を説明してください。
-5. Replicaとbackupがそれぞれ守るfailureを比較してください。
+1. WALの二つの先行書き込み規則を説明してください。
+2. フォースなし/スティールで再実行と取り消しの両方が必要になるスケジュールを作ってください。
+3. ファジーチェックポイントがWALを不要にしない理由は何ですか。
+4. ARIESの分析、再実行、取り消しで作る情報と処理を説明してください。
+5. レプリカとバックアップがそれぞれ守る障害を比較してください。
 
 ## 参考資料
 
@@ -423,4 +423,4 @@ Logical errorやdeleteも複製されます。過去へ戻るbackup/PITRは別�
 - [PostgreSQL Documentation: Continuous Archiving and PITR](https://www.postgresql.org/docs/current/continuous-archiving.html)
 - [C. Mohan et al., “ARIES: A Transaction Recovery Method”](https://doi.org/10.1145/128765.128770)
 
-次章からは分散DBへ進みます。まず同じdataを複数nodeへ複製するときのcommit条件とconsistencyを扱います。
+次章からは分散DBへ進みます。まず同じデータを複数ノードへ複製するときのコミット条件と整合性を扱います。

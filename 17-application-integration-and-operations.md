@@ -6,33 +6,33 @@ DB内部の性質を、Webアプリケーションの実装・リリース・監
 
 ## この章で答える問い
 
-- connection poolはなぜ必要で、大きくすれば速くなるわけではないのはなぜか
-- N+1、深いOFFSET、長時間トランザクションはDB内部へ何を起こすのか
-- schema migration、backup、failoverを安全に行うには何を確認すべきか
+- 接続プールはなぜ必要で、大きくすれば速くなるわけではないのはなぜか
+- N+1、深いオフセット、長時間トランザクションはDB内部へ何を起こすのか
+- スキーマ移行、バックアップ、フェイルオーバーを安全に行うには何を確認すべきか
 
 ## 扱う内容
 
-- connection確立コスト、pool sizing、backpressure
-- prepared statement、bind parameter、SQL injection対策
-- transaction boundaryと外部API呼び出し
-- N+1 query、batching、eager/lazy loading
-- offset paginationとkeyset pagination
-- timeout、retry、deadlock retry、idempotency
-- backward-compatible schema migrationとonline DDL
-- index作成、vacuum、statistics更新などの保守
-- slow query、lock wait、buffer hit ratio、replica lagの観測
-- backup restore rehearsal、failover、switchover
-- RPO、RTO、disaster recovery
-- least privilege、監査ログ、機密データの扱い
+- 接続確立コスト、接続プールの大きさの決定、逆圧
+- プリペアド文、バインドパラメーター、SQLインジェクション対策
+- トランザクション境界と外部API呼び出し
+- N+1クエリ、一括処理、即時／遅延読み込み
+- オフセットページ送りとキーセットページ送り
+- タイムアウト、再試行、デッドロック再試行、冪等性
+- 後方互換なスキーマ移行とオンラインDDL
+- インデックス作成、不要版の回収、統計情報更新などの保守
+- 低速クエリ、ロック待機、バッファヒット比率、レプリカ遅延の観測
+- バックアップ復元rehearsal、フェイルオーバー、計画切り替え
+- RPO、RTO、災害復旧
+- 最小権限、監査ログ、機密データの扱い
 
 ## 図解・具体例
 
-APIサーバ、connection pool、primary、replicaを結び、過負荷、migration、failover時の振る舞いを示す。
+APIサーバ、接続プール、主系、レプリカを結び、過負荷、移行、フェイルオーバー時の振る舞いを示す。
 
 ## 演習・確認課題
 
-高負荷APIの症状から、アプリケーション、pool、query plan、lock、storageのどこを観測するか調査手順を作る。
+高負荷APIの症状から、アプリケーション、プール、クエリ計画、ロック、ストレージのどこを観測するか調査手順を作る。
 
 ## 読了時の到達目標
 
-DBの問題をクエリだけに限定せず、接続、トランザクション、運用を含むend-to-endな問題として診断できる。
+DBの問題をクエリだけに限定せず、接続、トランザクション、運用を含む端から端までのな問題として診断できる。

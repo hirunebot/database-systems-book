@@ -6,17 +6,17 @@ SQLの表面的な構文より一段下にあるリレーショナルモデル�
 
 ## この章で答える問い
 
-- relation、tuple、attributeはSQLのtable、row、columnと完全に同じなのか
-- primary key、foreign key、unique constraintは何を保証するのか
+- 関係、タプル、属性はSQLの表、行、列と完全に同じなのか
+- 主キー、外部キー、一意制約は何を保証するのか
 - 正規化と非正規化は、どの問題に対する判断なのか
 
 ## 扱う内容
 
-- relation、tuple、attribute、domain、NULLの意味
-- candidate key、primary key、natural key、surrogate key
-- entity integrityとreferential integrity
-- functional dependencyと第1〜第3正規形の直感
-- denormalizationの目的と更新不整合のリスク
+- 関係、タプル、属性、ドメイン、NULLの意味
+- 候補キー、主キー、自然キー、代理キー
+- 実体整合性と参照整合性
+- 関数従属性と第1〜第3正規形の直感
+- 非正規化の目的と更新不整合のリスク
 - 論理スキーマと物理設計、インデックスの責務の違い
 
 ## 図解・具体例

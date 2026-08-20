@@ -1,78 +1,78 @@
 ---
-title: 04. B-tree、B+tree、インデックス設計
-description: page I/Oの観点からB+treeを理解し、clustered、secondary、複合、covering indexを設計する。
+title: 04. B-木、B+木、インデックス設計
+description: ページI/Oの観点からB+木を理解し、クラスタ化、副系、複合、カバリングインデックスを設計する。
 sidebar:
   order: 4
-  label: 04. B-tree、B+tree、インデックス設計
+  label: 04. B-木、B+木、インデックス設計
 ---
 
-Indexは「検索を速くする追加データ構造」です。ただし、どの検索にも効く魔法ではありません。Indexを追加すると、読み取り経路が増える一方、書き込み、memory、storage、maintenanceのcostも増えます。
+インデックスは「検索を速くする追加データ構造」です。ただし、どの検索にも効く魔法ではありません。インデックスを追加すると、読み取り経路が増える一方、書き込み、メモリ、ストレージ、保守のコストも増えます。
 
-この章では、RDBで広く使われるB-tree系indexをpage構造として理解し、queryに合わせたindex設計へつなげます。
+この章では、RDBで広く使われるB-木系インデックスをページ構造として理解し、クエリに合わせたインデックス設計へつなげます。
 
 ## この章で答える問い
 
-- B-treeとB+treeはbinary search treeと何が違うのか
-- なぜB+treeはストレージ上の検索と範囲走査に向くのか
-- clustered indexとsecondary indexでtable lookupはどう変わるのか
-- 複合indexは、どの条件とORDER BYに利用できるのか
-- covering indexは何を省略し、どのcostを増やすのか
+- B-木とB+木は二分探索木と何が違うのか
+- なぜB+木はストレージ上の検索と範囲走査に向くのか
+- クラスタ化インデックスとセカンダリインデックスで表の参照はどう変わるのか
+- 複合インデックスは、どの条件とORDER BYに利用できるのか
+- カバリングインデックスは何を省略し、どのコストを増やすのか
 
-## binary treeではなく多分木を使う理由
+## 二分木ではなく多分木を使う理由
 
-Memory上のbalanced binary search treeなら、N件の検索はO(log₂N)です。しかし各nodeが別pageにあると、木の高さだけI/Oが必要になります。
+メモリ上の平衡二分探索木なら、N件の検索はO(ログ₂N)です。しかし各ノードが別ページにあると、木の高さだけI/Oが必要になります。
 
-B-tree系構造は、一つのnodeへ多数のkeyとchild pointerを置きます。この分岐数をfan-outと呼びます。1 pageに数百のchild pointerを置ければ、数億件あっても木の高さを小さくできます。
+B-木系構造は、一つのノードへ多数のキーと子ポインターを置きます。この分岐数を分岐数と呼びます。1ページに数百の子ポインターを置ければ、数億件あっても木の高さを小さくできます。
 
-たとえばfan-outが400なら、単純化して次の件数を表せます。
+たとえば分岐数が400なら、単純化して次の件数を表せます。
 
 ```text
-height 1:          400 entries
-height 2:      160,000 entries
-height 3:   64,000,000 entries
-height 4: 25,600,000,000 entries
+高さ1:          400項目
+高さ2:      160,000項目
+高さ3:   64,000,000項目
+高さ4: 25,600,000,000項目
 ```
 
-Rootや上位nodeがBuffer Poolに残っていれば、検索ごとに必要なstorage I/Oは主にleaf付近だけになります。
+ルートや上位ノードがバッファプールに残っていれば、検索ごとに必要なストレージI/Oは主に葉付近だけになります。
 
-## B-treeとB+tree
+## B-木とB+木
 
 用語は文献・製品によって揺れますが、教科書的には次のように区別します。
 
-- **B-tree**：内部nodeにもrecordまたはrecord pointerを置ける
-- **B+tree**：内部nodeはseparator keyとchild pointerを持ち、全entryをleafへ置く
+- **B-木**：内部ノードにもレコードまたはレコードポインターを置ける
+- **B+木**：内部ノードは区切りキーと子ポインターを持ち、全項目を葉へ置く
 
-B+treeのleafはkey順にlinkされるため、あるkeyを見つけた後に隣のleafへ進む範囲走査が容易です。
+B+木の葉はキー順にリンクされるため、あるキーを見つけた後に隣の葉へ進む範囲走査が容易です。
 
 ```mermaid
 flowchart TB
-    Root["Root<br/>30 | 70"]
-    L1["Leaf<br/>10, 20, 25"]
-    L2["Leaf<br/>30, 40, 60"]
-    L3["Leaf<br/>70, 80, 90"]
+    Root["ルート<br/>30 | 70"]
+    L1["葉<br/>10, 20, 25"]
+    L2["葉<br/>30, 40, 60"]
+    L3["葉<br/>70, 80, 90"]
     Root --> L1
     Root --> L2
     Root --> L3
-    L1 -. next .-> L2
-    L2 -. next .-> L3
+    L1 -. 次の葉 .-> L2
+    L2 -. 次の葉 .-> L3
 ```
 
-DB製品がindexを「B-tree」と呼んでいても、leafにentryを集めてlinkするB+treeに近い実装が一般的です。本書では製品名を尊重しつつ、構造を説明するときはB+treeと呼びます。
+DB製品がインデックスを「B-木」と呼んでいても、葉に項目を集めてリンクするB+木に近い実装が一般的です。本書では製品名を尊重しつつ、構造を説明するときはB+木と呼びます。
 
-## point lookup
+## 単一キー検索
 
 WHERE id = 42001の検索を考えます。
 
-1. Root pageでseparator keyを比較し、childを選ぶ
-2. Internal pageがあれば同様にchildを選ぶ
-3. Leaf page内を検索し、index entryを見つける
-4. Entryがrow本体でなければ、record IDやprimary keyでtableを読む
+1. ルートページで区切りキーを比較し、子を選ぶ
+2. 内部ページがあれば同様に子を選ぶ
+3. 葉ページ内を検索し、インデックス項目を見つける
+4. 項目が行本体でなければ、レコードIDや主キーで表を読む
 
-最後のtable accessは製品・index種別によって異なります。Indexだけで必要columnがそろう場合は省略できることがあります。
+最後の表アクセスは製品・インデックス種別によって異なります。インデックスだけで必要列がそろう場合は省略できることがあります。
 
-## range scan
+## 範囲走査
 
-次のqueryでは、ordered_atの下限をB+treeで探し、その後leafを順番にたどれます。
+次のクエリでは、ordered_atの下限をB+木で探し、その後葉を順番にたどれます。
 
 ```sql
 SELECT id, ordered_at, total_amount
@@ -82,87 +82,87 @@ WHERE ordered_at >= TIMESTAMPTZ '2026-08-01'
 ORDER BY ordered_at;
 ```
 
-Start keyへ到達するcostに加えて、条件に該当するleaf pageと必要なtable pageを読みます。結果件数が多いほど後半のcostが支配的になり、table scanのほうが有利になる場合があります。
+開始キーへ到達するコストに加えて、条件に該当する葉ページと必要な表ページを読みます。結果件数が多いほど後半のコストが支配的になり、表走査のほうが有利になる場合があります。
 
-## insert、split、merge
+## 挿入、分割、マージ
 
-新しいentryはkey順に対応するleafへ入ります。Leafに空きがなければpage splitします。
+新しい項目はキー順に対応する葉へ入ります。葉に空きがなければページ分割します。
 
 ```mermaid
 flowchart LR
-    Before["Leaf<br/>10, 20, 30, 40<br/>+ 25"]
-    Left["Leaf<br/>10, 20, 25"]
-    Right["Leaf<br/>30, 40"]
-    Parent["Parentへseparator 30を追加"]
+    Before["葉<br/>10, 20, 30, 40<br/>+ 25"]
+    Left["葉<br/>10, 20, 25"]
+    Right["葉<br/>30, 40"]
+    Parent["親へ区切り30を追加"]
     Before --> Left
     Before --> Right
     Right --> Parent
 ```
 
-Splitでは新しいpageの割り当て、entry移動、parent更新、WALなどが必要です。Parentも満杯ならsplitが上へ伝播し、root splitで木が一段高くなることがあります。
+分割では新しいページの割り当て、項目移動、親更新、WALなどが必要です。親も満杯なら分割が上へ伝播し、ルート分割で木が一段高くなることがあります。
 
-Delete後に利用率が下がると、mergeやredistributionでpageをまとめる実装があります。ただし、並行アクセス中の即時mergeを避け、後からmaintenanceする製品もあります。
+削除後に利用率が下がると、マージや再分配でページをまとめる実装があります。ただし、並行アクセス中の即時マージを避け、後から保守する製品もあります。
 
-### fill factor
+### 充填率
 
-Pageを最初から100%埋めず空きを残すと、将来のinsert/updateによるsplitを減らせます。その代わり、同じentry数に必要なpageが増え、read I/Oとmemory使用が増えます。
+ページを最初から100%埋めず空きを残すと、将来の挿入／更新による分割を減らせます。その代わり、同じ項目数に必要なページが増え、読み取りI/Oとメモリ使用が増えます。
 
-単調増加keyはtree右端へinsertが集中しやすく、random keyはpage全体へ分散します。UUIDの種類やkey生成方法は、分散性だけでなくindex localityにも影響します。
+単調増加キーは木右端へ挿入が集中しやすく、ランダムキーはページ全体へ分散します。UUIDの種類やキー生成方法は、分散性だけでなくインデックス局所性にも影響します。
 
-## clustered index
+## クラスタ化インデックス
 
-Clusteredという語は製品ごとに意味が異なるため、物理構造まで確認する必要があります。
+クラスタ化という語は製品ごとに意味が異なるため、物理構造まで確認する必要があります。
 
 ### InnoDB
 
-InnoDBではtable data自体がprimary keyのclustered index leafへ格納されます。
+InnoDBでは表データ自体が主キーのクラスタ化インデックス葉へ格納されます。
 
-- Primary key lookupはleafでrow本体へ到達する
-- Secondary index leafは、row locatorとしてprimary key値を持つ
-- Secondary indexからrow全体を読むと、primary key B+treeをもう一度たどる
-- Primary keyが長いと、すべてのsecondary index entryも大きくなり得る
+- 主キー 参照は葉で行本体へ到達する
+- セカンダリインデックス葉は、行位置情報として主キー値を持つ
+- セカンダリインデックスから行全体を読むと、主キー B+木をもう一度たどる
+- 主キーが長いと、すべてのセカンダリインデックス項目も大きくなり得る
 
-Primary keyがない場合のclustered key選択規則もあるため、明示的に安定したkeyを設計するのが基本です。
+主キーがない場合のクラスタ化キー選択規則もあるため、明示的に安定したキーを設計するのが基本です。
 
 ### PostgreSQL
 
-PostgreSQLの通常tableはheapであり、B-tree index leafはheap tupleを指すTIDを持ちます。CLUSTERコマンドであるindex順にtableを並べ直せますが、その順序は後続の更新で自動維持されません。
+PostgreSQLの通常表はヒープであり、B-木インデックス葉はヒープタプルを指すTIDを持ちます。クラスターコマンドであるインデックス順に表を並べ直せますが、その順序は後続の更新で自動維持されません。
 
-つまり「clustered index」という同じ言葉から、InnoDBとPostgreSQLで同じtable accessを想像してはいけません。
+つまり「クラスタ化インデックス」という同じ言葉から、InnoDBとPostgreSQLで同じ表アクセスを想像してはいけません。
 
 ```mermaid
 flowchart LR
     subgraph InnoDB
-        S1["Secondary leaf"] --> PK["Primary key leaf<br/>row本体"]
+        S1["副系葉"] --> PK["主キー 葉<br/>行本体"]
     end
     subgraph PostgreSQL
-        S2["B-tree leaf"] --> Heap["Heap page<br/>tuple"]
+        S2["B-木葉"] --> Heap["ヒープページ<br/>タプル"]
     end
 ```
 
-## secondary index
+## セカンダリインデックス
 
-Primary/clustered access path以外のindexをsecondary indexと呼びます。Secondary indexは異なる検索条件を支えますが、row本体へ追加accessが必要な場合があります。
+主系/クラスタ化アクセス経路以外のインデックスをセカンダリインデックスと呼びます。セカンダリインデックスは異なる検索条件を支えますが、行本体へ追加アクセスが必要な場合があります。
 
-次のquery用にcustomer_idへindexを作るとします。
+次のクエリ用にcustomer_idへインデックスを作るとします。
 
 ```sql
 CREATE INDEX orders_customer_id_idx
 ON orders (customer_id);
 ```
 
-一人の顧客の注文が物理的に近ければtable page数は少なくなります。全体へ散らばっていれば、多数のrandom table accessになる可能性があります。Optimizerは対象件数とcorrelationを含む統計から、index scanを使うか判断します。
+一人の顧客の注文が物理的に近ければ表ページ数は少なくなります。全体へ散らばっていれば、多数のランダム表アクセスになる可能性があります。最適化器は対象件数と相関を含む統計から、インデックス走査を使うか判断します。
 
-## composite index
+## 複合インデックス
 
-Composite indexは複数columnを順序付きtupleとして保持します。
+複合インデックスは複数列を順序付きタプルとして保持します。
 
 ```sql
 CREATE INDEX orders_customer_ordered_idx
 ON orders (customer_id, ordered_at DESC);
 ```
 
-Index orderは概念的に次のようになります。
+インデックス注文は概念的に次のようになります。
 
 ```text
 (customer_id=10, ordered_at=2026-08-20)
@@ -171,7 +171,7 @@ Index orderは概念的に次のようになります。
 (customer_id=11, ordered_at=2026-08-19)
 ```
 
-このindexは次のqueryと相性がよいです。
+このインデックスは次のクエリと相性がよいです。
 
 ```sql
 SELECT id, ordered_at
@@ -181,35 +181,35 @@ ORDER BY ordered_at DESC
 LIMIT 20;
 ```
 
-先頭columncustomer_idを固定すると、その範囲内でordered_at順に読めるからです。
+先頭列のcustomer_idを固定すると、その範囲内でordered_at順に読めるからです。
 
-### leftmost prefix
+### 左端接頭辞
 
-一般にB+tree composite indexは、左から連続するcolumn条件を利用しやすい構造です。
+一般にB+木複合インデックスは、左から連続する列条件を利用しやすい構造です。
 
 | 条件 | 利用の考え方 |
 | --- | --- |
-| customer_id = ? | 先頭columnなので範囲を絞れる |
-| customer_id = ? AND ordered_at >= ? | 2 columnで狭い範囲を作れる |
+| customer_id = ? | 先頭列なので範囲を絞れる |
+| customer_id = ? AND ordered_at >= ? | 2列で狭い範囲を作れる |
 | ordered_at >= ? | 先頭customer_idが未指定なので全体に散らばる |
-| customer_id >= ? AND ordered_at = ? | 最初のrange以降を探索境界へ使いにくい |
+| customer_id >= ? AND ordered_at = ? | 最初の範囲以降を探索境界へ使いにくい |
 
-製品によってskip scanなどの最適化がありますが、基本構造を理解したうえで実行計画を確認します。
+製品によってスキップ走査などの最適化がありますが、基本構造を理解したうえで実行計画を確認します。
 
-### column順をselectivityだけで決めない
+### 列順を選択率だけで決めない
 
-「selectivityが高いcolumnを必ず先頭にする」という規則だけでは不十分です。次をまとめて考えます。
+「選択率が高い列を必ず先頭にする」という規則だけでは不十分です。次をまとめて考えます。
 
-- equalityかrangeか
-- 複数queryで共通するprefix
+- 等値か範囲か
+- 複数クエリで共通する接頭辞
 - ORDER BYやGROUP BY
-- join condition
-- 更新頻度とentry size
-- partition keyとの関係
+- 結合条件
+- 更新頻度と項目大きさ
+- パーティションキーとの関係
 
-## covering indexとindex-only scan
+## カバリングインデックスとインデックスのみの走査
 
-Queryに必要なcolumnがすべてindex entryにあれば、table pageを読まずに結果を返せる可能性があります。
+クエリに必要な列がすべてインデックス項目にあれば、表ページを読まずに結果を返せる可能性があります。
 
 ```sql
 CREATE INDEX orders_customer_covering_idx
@@ -217,21 +217,21 @@ ON orders (customer_id, ordered_at DESC)
 INCLUDE (status, total_amount);
 ```
 
-Key columnは探索と順序に使われ、INCLUDE columnはpayloadとしてleafへ置かれます。これによりindex-only scanが可能になります。
+キー列は探索と順序に使われ、INCLUDE列は内容として葉へ置かれます。これによりインデックスのみの走査が可能になります。
 
-ただし「indexに値がある」だけではtable accessを必ず省略できるとは限りません。MVCC visibilityをtable側で確認する実装では追加情報が必要です。PostgreSQLはvisibility mapを使い、page上の全tupleが可視と分かる場合にheap accessを省略できます。
+ただし「インデックスに値がある」だけでは表アクセスを必ず省略できるとは限りません。MVCC可視性を表側で確認する実装では追加情報が必要です。PostgreSQLは可視性マップを使い、ページ上の全タプルが可視と分かる場合にヒープアクセスを省略できます。
 
-Covering indexのcostもあります。
+カバリングインデックスのコストもあります。
 
-- entryが大きくなりfan-outが下がる
-- leaf page数が増える
-- update時に書き換えるindexが増える
-- Buffer Poolを多く使う
-- vacuumやmaintenance costが増える
+- 項目が大きくなり分岐数が下がる
+- 葉ページ数が増える
+- 更新時に書き換えるインデックスが増える
+- バッファプールを多く使う
+- 不要版の回収や保守コストが増える
 
-## partial index
+## 部分インデックス
 
-一部のrowだけをindexへ入れるpartial indexは、条件が安定しておりquery predicateと合致する場合に有効です。
+一部の行だけをインデックスへ入れる部分インデックスは、条件が安定しておりクエリ述語と合致する場合に有効です。
 
 ```sql
 CREATE INDEX orders_pending_idx
@@ -239,64 +239,64 @@ ON orders (ordered_at)
 WHERE status = 'pending';
 ```
 
-Pendingが全注文のごく一部なら、小さくhotなindexを作れます。一方、query conditionがpartial index predicateを満たすとoptimizerが証明できなければ使われません。
+保留中が全注文のごく一部なら、小さく高負荷なインデックスを作れます。一方、クエリ条件が部分インデックス述語を満たすと最適化器が証明できなければ使われません。
 
-## selectivityとcardinality
+## 選択率と行数
 
-Selectivityは、条件に一致する割合です。1億row中1件なら非常に高い選別性、半分なら低い選別性と表現します。
+選択率は、条件に一致する割合です。1億行中1件なら非常に高い選別性、半分なら低い選別性と表現します。
 
-Index scanの概算costを次のように分けると理解しやすくなります。
+インデックス走査の概算コストを次のように分けると理解しやすくなります。
 
 ```text
-tree traversal
-+ matching leaf pages
-+ table pages
-+ CPU for comparison / visibility
+木走査
++ 一致葉ページ
++ 表ページ
++ 比較／可視性判定のCPUコスト
 ```
 
-対象rowが増えるとtree traversalの定数部分より、leafとtable accessが支配的になります。低selectivity条件ではsequential scanが有利になり得ます。
+対象行が増えると木走査の定数部分より、葉と表アクセスが支配的になります。低選択率条件では順次走査が有利になり得ます。
 
-## index designの手順
+## インデックス設計の手順
 
-1. 遅いqueryと実際のparameter分布を特定する
-2. WHERE、JOIN、ORDER BY、GROUP BY、SELECT columnを分ける
-3. equality、range、sort、LIMITを考えてkey順を決める
-4. table lookup削減の価値が高ければcoveringを検討する
-5. 書き込み量、既存indexとの重複、storage costを評価する
-6. EXPLAIN ANALYZEとproductionに近いdata分布で検証する
-7. 利用されないindexを監視し、削除候補にする
+1. 遅いクエリと実際のパラメーター分布を特定する
+2. WHERE、結合、ORDER BY、GROUP BY、SELECT列を分ける
+3. 等値、範囲、ソート、上限を考えてキー順を決める
+4. 表の参照削減の価値が高ければカバリングを検討する
+5. 書き込み量、既存インデックスとの重複、ストレージコストを評価する
+6. EXPLAIN解析と本番環境に近いデータ分布で検証する
+7. 利用されないインデックスを監視し、削除候補にする
 
 ## よくある誤解
 
-### 「columnごとにindexを作ればよい」
+### 「列ごとにインデックスを作ればよい」
 
-複数の単一column indexを組み合わせられる場合もありますが、composite indexの順序やcoveringとはcostが異なります。書き込み時はすべてのindex更新が必要です。
+複数の単一列インデックスを組み合わせられる場合もありますが、複合インデックスの順序やカバリングとはコストが異なります。書き込み時はすべてのインデックス更新が必要です。
 
-### 「primary key lookupはどのDBでも1回のB+tree traversal」
+### 「主キー 参照はどのDBでも1回のB+木走査」
 
-InnoDB clustered primary key、PostgreSQL heap、ほかのstorage engineではrow本体への到達方法が異なります。
+InnoDBクラスタ化主キー、PostgreSQLヒープ、ほかのストレージエンジンでは行本体への到達方法が異なります。
 
-### 「index sizeはtable sizeに比べれば無視できる」
+### 「インデックス大きさは表大きさに比べれば無視できる」
 
-複数のwide covering indexや長いprimary keyは、storage、memory、WAL、backup、replication量を大きくします。
+複数の幅広いカバリングインデックスや長い主キーは、ストレージ、メモリ、WAL、バックアップ、レプリケーション量を大きくします。
 
 ## まとめ
 
-- B+treeは高いfan-outで木の高さを抑え、leaf linkでrange scanを可能にする
-- Insertではpage splitが発生し、fill factorはread密度とwrite余裕を交換する
-- Clustered/secondary indexの物理構造は製品ごとに確認する
-- Composite indexは左からのkey順、equality、range、sortを合わせて設計する
-- Covering indexはtable accessを減らす代わりにentryとwrite costを増やす
-- Selectivityが低い条件ではtable scanが有利になり得る
-- Indexはqueryとdata分布を測定して設計し、維持costまで評価する
+- B+木は高い分岐数で木の高さを抑え、葉リンクで範囲走査を可能にする
+- 挿入ではページ分割が発生し、充填率は読み取り密度と書き込み余裕を交換する
+- クラスタ化/セカンダリインデックスの物理構造は製品ごとに確認する
+- 複合インデックスは左からのキー順、等値、範囲、ソートを合わせて設計する
+- カバリングインデックスは表アクセスを減らす代わりに項目と書き込みコストを増やす
+- 選択率が低い条件では表走査が有利になり得る
+- インデックスはクエリとデータ分布を測定して設計し、維持コストまで評価する
 
 ## 確認問題
 
-1. Fan-out 400のB+treeがbinary treeよりstorage I/Oを減らせる理由を説明してください。
-2. InnoDBのsecondary index lookupでprimary keyが必要になる理由は何ですか。
-3. (customer_id, ordered_at) indexがordered_at単独条件に使いにくい理由を説明してください。
-4. Covering indexがreadを改善し、writeを悪化させる経路を列挙してください。
-5. 対象rowがtableの40%ある場合、index scanとtable scanをどう比較しますか。
+1. 分岐数400のB+木が二分木よりストレージI/Oを減らせる理由を説明してください。
+2. InnoDBのセカンダリインデックス参照で主キーが必要になる理由は何ですか。
+3. (customer_id, ordered_at) インデックスがordered_at単独条件に使いにくい理由を説明してください。
+4. カバリングインデックスが読み取りを改善し、書き込みを悪化させる経路を列挙してください。
+5. 対象行が表の40%ある場合、インデックス走査と表走査をどう比較しますか。
 
 ## 参考資料
 
@@ -305,4 +305,4 @@ InnoDB clustered primary key、PostgreSQL heap、ほかのstorage engineではro
 - [PostgreSQL Documentation: Partial Indexes](https://www.postgresql.org/docs/current/indexes-partial.html)
 - [MySQL Documentation: Clustered and Secondary Indexes](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html)
 
-次章では、等価検索に特化したhash indexと、書き込みを順次I/Oへ変換するLSM-treeを扱います。
+次章では、等価検索に特化したハッシュインデックスと、書き込みを順次I/Oへ変換するLSM-木を扱います。

@@ -1,4 +1,4 @@
-# 04. B-tree、B+tree、インデックス設計
+# 04. B-木、B+木、インデックス設計
 
 ## この章の役割
 
@@ -6,20 +6,20 @@ RDBで中心的に使われる木構造インデックスを、計算量だけ�
 
 ## この章で答える問い
 
-- B-treeとB+treeは二分探索木と何が違うのか
-- なぜB+treeは範囲検索と順序付き走査に向くのか
-- clustered indexとsecondary indexでは、検索後のI/Oがどう違うのか
+- B-木とB+木は二分探索木と何が違うのか
+- なぜB+木は範囲検索と順序付き走査に向くのか
+- クラスタ化インデックスとセカンダリインデックスでは、検索後のI/Oがどう違うのか
 
 ## 扱う内容
 
-- fan-out、root/internal/leaf node、木の高さ
-- search、insert、split、mergeの基本動作
-- B-treeとB+treeの構造上の違い
-- clustered/primary index、heap-organized table、secondary index
-- composite indexとleftmost prefix
-- covering index、included column、index-only scan
-- partial index、selectivity、重複値とNULL
-- write amplificationとページ分割
+- 分岐数、ルート/内部/葉ノード、木の高さ
+- 探索、挿入、分割、マージの基本動作
+- B-木とB+木の構造上の違い
+- クラスタ化/主インデックス、ヒープ構成表、セカンダリインデックス
+- 複合インデックスと左端接頭辞
+- カバリングインデックス、付加列、インデックスのみの走査
+- 部分インデックス、選択率、重複値とNULL
+- 書き込み増幅とページ分割
 
 ## 図解・具体例
 
@@ -31,4 +31,4 @@ RDBで中心的に使われる木構造インデックスを、計算量だけ�
 
 ## 読了時の到達目標
 
-インデックスの有無だけでなく、木の高さ、leaf走査、table lookupの回数からアクセスコストを説明できる。
+インデックスの有無だけでなく、木の高さ、葉走査、表の参照の回数からアクセスコストを説明できる。
